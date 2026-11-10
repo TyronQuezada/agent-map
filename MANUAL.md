@@ -6,7 +6,7 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 
 ## 1. Instalación
 
-1. Descarga `Agent Map Setup x.y.z.exe` desde [Releases](https://github.com/TyronQuezada/agent-map/releases/latest) (o genéralo con `npm run dist`, queda en `dist\`) y ejecútalo.
+1. Descarga `Agent-Map-Setup-x.y.z.exe` desde [Releases](https://github.com/TyronQuezada/agent-map/releases/latest) (o genéralo con `npm run dist`, queda en `dist\`) y ejecútalo.
 2. Elige la carpeta de instalación. Por defecto es `C:\Users\<tú>\AppData\Local\Programs\Agent Map` y no necesita permisos de administrador.
 3. El instalador crea accesos directos en el **Escritorio** y en el **menú Inicio**, y abre la app al terminar.
 
