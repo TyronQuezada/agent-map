@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Oficina · Agent Map</title>
+  <link rel="icon" href="/icon.png">
+  <link rel="stylesheet" href="/style.css">
+  <script>try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem('agentmap.theme')) || 'xp'; } catch { }</script>
+</head>
+<body class="office-page">
+  <header class="office-bar">
+    <b id="offTitle">🏢 Oficina</b>
+    <span id="offLegend" class="office-legend"></span>
+    <span class="spacer"></span>
+    <button id="offFull" class="xpbtn small" title="Pantalla completa (F11)">⛶ Pantalla completa</button>
+    <button id="offDock" class="xpbtn small" title="Cerrar esta ventana y volver a mostrar la oficina en el panel">📌 Anclar al panel</button>
+  </header>
+  <main class="office-stage">
+    <div id="offWrap" class="office-wrap">
+      <canvas id="offCanvas" class="office" role="img" aria-label="Oficina del equipo de agentes"></canvas>
+    </div>
+  </main>
+  <p id="offMsg" class="office-msg" hidden></p>
+  <script src="/office.js"></script>
+  <script src="/office-page.js"></script>
+</body>
+</html>

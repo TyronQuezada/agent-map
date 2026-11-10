@@ -1,11 +1,12 @@
 // Agent Map como app de escritorio: arranca el servidor dentro de la app (puerto interno al azar)
 // y lo muestra en una ventana sin marco con la barra de título XP propia.
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, clipboard } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startServer, killAllTerms, openTermCount, setLogger } from '../server.js';
 import { USAGE_FILE } from '../statusline-tap.js';
+import { readPrefs } from '../lib/prefs.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
@@ -39,20 +40,31 @@ async function createWindow() {
   installTap();
   const port = await startServer(0);
   origin = `http://127.0.0.1:${port}`;
+  const prefs = readPrefs();
   win = new BrowserWindow({
     width: 1400, height: 880, minWidth: 900, minHeight: 560,
-    frame: false, backgroundColor: '#ece9d8', show: false,
+    fullscreen: prefs.startFullscreen, // como apretar F11 al abrir (se cambia en ⚙ Opciones)
+    frame: false, backgroundColor: { matrix: '#000000', noche: '#0f1626' }[prefs.theme] || '#ece9d8', show: false,
     title: 'Agent Map', icon: path.join(here, '..', 'build', 'icon.ico'),
     webPreferences: { preload: path.join(here, 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false },
   });
   win.once('ready-to-show', () => win.show());
-  win.on('maximize', () => win.webContents.send('win-state', true));
-  win.on('unmaximize', () => win.webContents.send('win-state', false));
+  const sendState = () => win.webContents.send('win-state', { max: win.isMaximized(), full: win.isFullScreen() });
+  for (const ev of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) win.on(ev, sendState);
 
   // Links externos (repos de agentes, documentación) se abren en el navegador, nunca dentro de la app.
+  // Única ventana propia permitida: la oficina del equipo (para moverla a otro monitor).
   win.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(origin + '/office.html?')) return { action: 'allow', overrideBrowserWindowOptions: {
+      width: 960, height: 760, minWidth: 360, minHeight: 300, title: 'Oficina · Agent Map', autoHideMenuBar: true,
+      backgroundColor: '#120d0a', icon: path.join(here, '..', 'build', 'icon.ico'),
+    } };
     if (/^https:\/\//.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+  win.webContents.on('did-create-window', child => { // la oficina tampoco puede navegar fuera ni abrir otras ventanas
+    child.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) e.preventDefault(); });
+    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) e.preventDefault(); });
 
@@ -99,11 +111,18 @@ async function quit() {
 ipcMain.on('win', (e, action) => {
   if (!win || e.sender !== win.webContents) return;
   if (action === 'minimize') win.minimize();
-  else if (action === 'maximize') win.isMaximized() ? win.unmaximize() : win.maximize();
+  else if (action === 'maximize') {
+    if (win.isFullScreen()) win.setFullScreen(false); // en pantalla completa, □ vuelve a ventana
+    else win.isMaximized() ? win.unmaximize() : win.maximize();
+  }
+  else if (action === 'fullscreen') win.setFullScreen(!win.isFullScreen());
   else if (action === 'close') win.close(); // pasa por la confirmación de arriba
   else if (action === 'close-confirmed') quit();
 });
-ipcMain.handle('win-is-maximized', e => e.sender === win?.webContents && win.isMaximized());
+ipcMain.handle('win-state', e => e.sender === win?.webContents ? { max: win.isMaximized(), full: win.isFullScreen() } : null);
+// Portapapeles para la terminal (Ctrl+V / click derecho): la página no tiene acceso directo con sandbox.
+ipcMain.handle('clip-read', e => e.sender === win?.webContents ? clipboard.readText() : '');
+ipcMain.on('clip-write', (e, text) => { if (e.sender === win?.webContents && typeof text === 'string') clipboard.writeText(text); });
 
 if (firstInstance) app.whenReady().then(createWindow).catch(err => {
   dialog.showErrorBox('Agent Map no pudo iniciar', String(err?.stack || err));

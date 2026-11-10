@@ -1,5 +1,38 @@
 // Agent Map — interfaz. Sin frameworks: estado simple + render por innerHTML con delegación de eventos.
 const $ = sel => document.querySelector(sel);
+// Preferencias de esta ventana (tamaño de paneles, secciones plegadas). Si el almacenamiento falla, se usan los valores por defecto.
+const store = {
+  get(k, def) { try { const v = localStorage.getItem('agentmap.' + k); return v == null ? def : JSON.parse(v); } catch { return def; } },
+  set(k, v) { try { localStorage.setItem('agentmap.' + k, JSON.stringify(v)); } catch {} },
+};
+// ---------- preferencias (se guardan en ~/.agent-map/prefs.json vía /api/prefs) ----------
+const THEMES = {
+  xp: { name: 'Windows XP', desc: 'Azul Luna, el clásico', term: { background: '#0c0c0c', foreground: '#e6e6e6', selectionBackground: '#316ac5' } },
+  matrix: { name: 'Matrix', desc: 'Letras verdes sobre negro', term: { background: '#000000', foreground: '#33ff66', cursor: '#00ff41', selectionBackground: '#0f5c25' } },
+  noche: { name: 'Noche', desc: 'Oscuro azulado, suave para la vista', term: { background: '#0b1220', foreground: '#dfe7f7', cursor: '#4d8dff', selectionBackground: '#2f5fd0' } },
+};
+const COLORS = { red: ['Rojo', '#e5484d'], orange: ['Naranja', '#f5a524'], yellow: ['Amarillo', '#d4b106'], green: ['Verde', '#30a46c'],
+  teal: ['Turquesa', '#12a594'], blue: ['Azul', '#3e7bfa'], purple: ['Morado', '#8e4ec6'], pink: ['Rosa', '#e93d82'] };
+const lbl = id => state.prefs.labels[id] || {};
+
+async function savePrefs(patch) {
+  const r = await fetch('/api/prefs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
+  if (!r.ok) throw new Error(await r.text() || 'No se pudo guardar');
+  state.prefs = await r.json();
+  applyPrefs();
+  renderAll();
+}
+function applyPrefs() {
+  const { theme, fontSize } = state.prefs;
+  document.documentElement.dataset.theme = theme;
+  store.set('theme', theme); // para pintar el tema correcto al abrir, antes de que responda el servidor
+  for (const t of state.terms.values()) {
+    t.term.options.theme = THEMES[theme].term;
+    t.term.options.fontSize = fontSize;
+  }
+  fitActive();
+}
+
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const state = {
@@ -11,7 +44,9 @@ const state = {
   expandedSessions: new Set(),
   terms: new Map(),          // key -> { term, fit, ws, el, label, sessionId }
   active: null,              // key de la terminal visible (null = inicio)
+  prefs: { theme: store.get('theme', 'xp'), fontSize: 13, startFullscreen: true, labels: {} },
 };
+if (!THEMES[state.prefs.theme]) state.prefs.theme = 'xp';
 
 // ---------- utilidades ----------
 function ago(iso) {
@@ -29,7 +64,8 @@ function duration(a, b) {
   const m = Math.round((new Date(b) - new Date(a)) / 60000);
   return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
 }
-const title = s => s.title || s.aiTitle || s.firstPrompt || s.id.slice(0, 8);
+const originalTitle = s => s.title || s.aiTitle || s.firstPrompt || s.id.slice(0, 8);
+const title = s => lbl(s.id).name || originalTitle(s); // nombre puesto en Agent Map > título de Claude
 const allSessions = () => state.projects.flatMap(p => p.sessions.map(s => ({ ...s, project: p })));
 const findSession = id => allSessions().find(s => s.id === id);
 const openHere = id => state.terms.has(id);
@@ -69,11 +105,13 @@ function matches(s, p) {
 function sessionNode(s, p) {
   const subs = s.subagents;
   const open = state.expandedSessions.has(s.id);
-  let html = `<div class="node ${state.selected === s.id && !state.selectedSub ? 'sel' : ''}" role="treeitem"
-      data-act="session" data-id="${s.id}" title="${esc(p.cwd)}">
+  const l = lbl(s.id), color = COLORS[l.color];
+  let html = `<div class="node ${state.selected === s.id && !state.selectedSub ? 'sel' : ''}${color ? ' tagged' : ''}" role="treeitem"
+      data-act="session" data-id="${s.id}" title="${esc(p.cwd)} · click derecho: nombre, color, fijar"${color ? ` style="--tag:${color[1]}"` : ''}>
     <span class="twisty" data-act="toggle-session" data-id="${s.id}">${subs.length ? (open ? '▾' : '▸') : ''}</span>
     <span class="dot ${dotClass(s)}" title="${dotTitle(s)}"></span>
-    <span class="label">${esc(title(s))}</span>
+    <span class="label">${l.pinned ? '📌 ' : ''}${esc(title(s))}</span>
+    ${unreadBadge(unreadOf(s), unreadOf(s) + " respuesta(s) nueva(s) de Claude")}
     ${subs.length ? `<span class="badge" title="Subagentes">${subs.length}</span>` : ''}
     <span class="meta">${ago(s.end)}</span>
   </div>`;
@@ -94,7 +132,8 @@ function renderTree() {
   const searching = !!state.query || state.filter !== 'all';
 
   const live = allSessions().filter(s => (s.live || openHere(s.id)) && matches(s, s.project));
-  let html = '';
+  const pinned = allSessions().filter(s => lbl(s.id).pinned && matches(s, s.project));
+  let html = pinned.length ? `<div class="section">📌 Fijadas (${pinned.length})</div>` + pinned.map(s => sessionNode(s, s.project)).join('') : '';
   if (live.length) {
     html += `<div class="section">● Activas ahora (${live.length})</div>` + live.map(s => sessionNode(s, s.project)).join('');
   }
@@ -107,7 +146,7 @@ function renderTree() {
     const open = searching || state.expandedProjects.has(p.cwd);
     html += `<div class="node project" data-act="toggle-project" data-cwd="${esc(p.cwd)}" title="${esc(p.cwd)}">
       <span class="twisty">${open ? '▾' : '▸'}</span>${projectDot(p)}<span>${open ? '📂' : '📁'}</span>
-      <span class="label">${esc(p.name)}</span><span class="badge">${sessions.length}</span></div>`;
+      <span class="label">${esc(p.name)}</span>${(n => unreadBadge(n, n + " respuesta(s) nueva(s) en este proyecto"))(p.sessions.reduce((t, s) => t + unreadOf(s), 0))}<span class="badge">${sessions.length}</span></div>`;
     if (open) html += `<div class="children">${sessions.map(s => sessionNode(s, p)).join('')}</div>`;
   }
   if (!shown) html += `<div class="empty">No hay sesiones que coincidan.</div>`;
@@ -132,6 +171,196 @@ $('#tree').addEventListener('click', e => {
   if (act === 'session') selectSession(id);
 });
 
+// ---------- menú contextual de una sesión (click derecho) ----------
+$('#tree').addEventListener('contextmenu', e => {
+  const el = e.target.closest('[data-act="session"]');
+  if (!el) return;
+  e.preventDefault();
+  openCtxMenu(e.clientX, e.clientY, el.dataset.id);
+});
+const closeCtxMenu = () => document.querySelector('.ctxmenu')?.remove();
+document.addEventListener('mousedown', e => { if (!e.target.closest('.ctxmenu')) closeCtxMenu(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu(); });
+window.addEventListener('blur', closeCtxMenu);
+window.addEventListener('resize', closeCtxMenu);
+
+function openCtxMenu(x, y, id) {
+  closeCtxMenu();
+  const s = findSession(id);
+  if (!s) return;
+  const l = lbl(id);
+  const m = document.createElement('div');
+  m.className = 'ctxmenu';
+  m.setAttribute('role', 'menu');
+  m.setAttribute('aria-label', 'Opciones de la sesión');
+  m.innerHTML = `
+    <button role="menuitem" data-ctx="open">▶ Abrir</button>
+    <button role="menuitem" data-ctx="rename">✏️ Cambiar nombre…</button>
+    <div class="ctx-label">🎨 Color</div>
+    <div class="ctx-colors">${Object.entries(COLORS).map(([c, [name, hex]]) =>
+      `<button role="menuitemradio" aria-checked="${l.color === c}" data-ctx="color" data-color="${c}" title="${name}" aria-label="${name}" style="--c:${hex}"></button>`).join('')}
+      <button role="menuitemradio" aria-checked="${!l.color}" data-ctx="color" data-color="" class="none" title="Sin color" aria-label="Sin color">✕</button></div>
+    <button role="menuitem" data-ctx="pin">📌 ${l.pinned ? 'Quitar de fijadas' : 'Fijar arriba'}</button>
+    <button role="menuitem" data-ctx="copy">📋 Copiar ID de la sesión</button>
+    <hr>
+    <button role="menuitem" data-ctx="reset" ${Object.keys(l).length ? '' : 'disabled'}>↺ Restablecer nombre, color y fijado</button>`;
+  document.body.appendChild(m);
+  // Dentro de la pantalla aunque el click sea cerca de un borde.
+  m.style.left = Math.min(x, innerWidth - m.offsetWidth - 4) + 'px';
+  m.style.top = Math.min(y, innerHeight - m.offsetHeight - 4) + 'px';
+  m.querySelector('button').focus();
+  m.addEventListener('keydown', e => { // flechas para moverse por el menú
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [...m.querySelectorAll('button:not(:disabled)')];
+    const i = items.indexOf(document.activeElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length].focus();
+  });
+  m.addEventListener('click', async e => {
+    const b = e.target.closest('[data-ctx]');
+    if (!b) return;
+    closeCtxMenu();
+    const act = b.dataset.ctx;
+    try {
+      if (act === 'open') selectSession(id);
+      else if (act === 'rename') renameSession(s);
+      else if (act === 'color') await savePrefs({ label: { id, color: b.dataset.color || null } });
+      else if (act === 'pin') await savePrefs({ label: { id, pinned: !l.pinned } });
+      else if (act === 'copy') writeClipboard(id);
+      else if (act === 'reset') await savePrefs({ label: { id, reset: true } });
+    } catch (err) { openModal('No se pudo guardar', `<p class="confirm-msg">${esc(err.message)}</p>`); }
+  });
+}
+
+function renameSession(s) {
+  openModal('✏️ Cambiar nombre', `<form class="rename">
+      <label for="renameInput">Nombre de la sesión</label>
+      <input id="renameInput" maxlength="120" value="${esc(title(s))}" autocomplete="off">
+      <p class="muted">Solo cambia cómo se ve en Agent Map: la conversación de Claude no se toca. Déjalo vacío para volver al original: <i>${esc(originalTitle(s))}</i></p>
+      <p class="picker-msg" id="renameMsg" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="xpbtn" data-close-modal>Cancelar</button>
+        <button class="xpbtn primary">Guardar</button>
+      </div>
+    </form>`, { sticky: true });
+  const input = $('#renameInput');
+  input.select();
+  $('#modalBody form').onsubmit = async e => {
+    e.preventDefault();
+    const name = input.value.trim() === originalTitle(s) ? '' : input.value;
+    try { await savePrefs({ label: { id: s.id, name } }); $('#modal').close(); }
+    catch (err) { $('#renameMsg').textContent = err.message; }
+  };
+}
+
+// ---------- 📖 Acerca de: guía en diapositivas, como la intro de un juego ----------
+const ABOUT = [
+  { img: 'session', title: '¡Bienvenido a Agent Map!', text: 'Tu centro de mando para Claude Code. A la izquierda están todas tus sesiones, al centro las terminales y a la derecha lo que pasó en cada conversación.', tip: 'Avanza con ▶ o con las flechas del teclado.' },
+  { img: 'terminal', title: 'Terminales de verdad', text: 'Click en una sesión y se retoma en una terminal real. Las terminales siguen vivas en la barra de tareas de abajo aunque cambies de sesión.', tip: 'Ctrl+V pega, Ctrl+C copia lo seleccionado y el click derecho copia o pega.' },
+  { img: 'context-menu', title: 'Ordena tus sesiones', text: 'Click derecho en una sesión: cámbiale el nombre, márcala con un color o fíjala arriba. Tus archivos de Claude no se tocan.', tip: 'Arrastra las líneas entre paneles para darle más espacio a lo que necesites.' },
+  { img: 'team-form', title: 'Nivel 1 · Arma tu equipo', text: 'Al iniciar un proyecto, "👥 Iniciar con equipo" crea un jefe y 2 agentes con el nombre, cargo e instrucciones que tú quieras. Hay plantillas: videojuego, web, ingeniería inversa, datos y más.', tip: 'Elige la carpeta de UN proyecto: el equipo vale para esa carpeta y todo lo que tenga adentro.' },
+  { img: 'team', title: 'Nivel 2 · El jefe reparte el trabajo', text: 'Tú solo le hablas al jefe, en la terminal del centro. Él divide el pedido, lo anota en TAREAS.md y se lo encarga a los agentes, que pueden trabajar al mismo tiempo.', tip: 'Click en una ficha de la izquierda para ver qué hace ese agente, paso a paso. Es solo para mirar: no se le interrumpe.' },
+  { img: 'office-window', title: 'Nivel 3 · La oficina', text: 'Sin trabajo, los tres duermen (zzz). Cuando el jefe encarga algo, el agente despierta y teclea con su monitor encendido. A ratos van por café o a la impresora.', tip: 'El café y la impresora son de adorno; dormir y trabajar es lo que pasa de verdad.' },
+  { img: 'office-full', title: 'Nivel 4 · Lee sus pensamientos', text: 'Pasa el mouse sobre alguien y verás qué está haciendo en pocas palabras y cuánto tiempo lleva: "Codeando player.gd ⏱ 2:15".', tip: '⛶ pone la oficina en pantalla completa y ⧉ la saca a su propia ventana, para llevarla a otro monitor. 📌 la vuelve a anclar.' },
+  { img: 'office-night', title: 'Nivel 5 · Cuando se acaban los tokens', text: 'Si tu plan llega al límite, se apaga la luz de la oficina y el equipo duerme hasta que se renueven los tokens, con una cuenta regresiva.', tip: 'Abajo, en la barra de tareas, siempre ves cuánto llevas de la sesión de 5 horas, cuánto te queda y cuándo se reinicia.' },
+  { img: 'matrix', title: 'Elige tu estilo', text: 'En ⚙ Opciones cambias el tema (Windows XP, Matrix o Noche), el tamaño de letra de la terminal y si la app abre en pantalla completa.', tip: 'F11 activa o desactiva la pantalla completa cuando quieras.' },
+  { img: 'options', title: '¡Listo para jugar!', text: 'Consejo de jefe: pide tareas que no toquen los mismos archivos, así tus dos agentes trabajan en paralelo sin pisarse. Y vigila el % de uso: dos agentes gastan el doble.', tip: 'Puedes volver a ver esta guía desde ⚙ Opciones → Acerca de.' },
+];
+
+function showAbout(start = 0) {
+  openModal('📖 Cómo funciona Agent Map', `<div class="about">
+      <div class="about-screen"><img id="abImg" alt=""><span class="about-level" id="abCount"></span></div>
+      <div class="about-box" id="abBox" title="Click para mostrar todo el texto">
+        <h3 id="abTitle"></h3>
+        <p id="abText"></p>
+        <p class="about-tip" id="abTip"></p>
+        <span class="about-blink" aria-hidden="true">▼</span>
+      </div>
+      <div class="about-nav">
+        <button class="xpbtn" id="abPrev">◀ Anterior</button>
+        <span class="about-dots" id="abDots" role="tablist" aria-label="Diapositivas"></span>
+        <button class="xpbtn primary" id="abNext">Siguiente ▶</button>
+      </div>
+    </div>`);
+  let i = start, typer = 0;
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const show = n => {
+    i = Math.max(0, Math.min(ABOUT.length - 1, n));
+    const s = ABOUT[i];
+    $('#abImg').src = '/about/' + s.img + '.png';
+    $('#abImg').alt = s.title;
+    $('#abCount').textContent = `${i + 1} / ${ABOUT.length}`;
+    $('#abTitle').textContent = s.title;
+    $('#abTip').textContent = '💡 ' + s.tip;
+    $('#abPrev').disabled = i === 0;
+    $('#abNext').textContent = i === ABOUT.length - 1 ? '✓ Terminar' : 'Siguiente ▶';
+    $('#abDots').innerHTML = ABOUT.map((x, k) => `<button role="tab" aria-selected="${k === i}" aria-label="${k + 1}. ${esc(x.title)}" data-slide="${k}"></button>`).join('');
+    // El texto aparece letra por letra, como un diálogo de RPG (click para verlo completo).
+    clearInterval(typer);
+    const el = $('#abText');
+    if (reduce) { el.textContent = s.text; return; }
+    let k = 0;
+    el.textContent = '';
+    typer = setInterval(() => { k += 2; el.textContent = s.text.slice(0, k); if (k >= s.text.length || !el.isConnected) clearInterval(typer); }, 18);
+  };
+  const body = $('#modalBody');
+  body.onclick = e => {
+    if (e.target.id === 'abPrev') show(i - 1);
+    else if (e.target.id === 'abNext') i === ABOUT.length - 1 ? $('#modal').close() : show(i + 1);
+    else if (e.target.dataset.slide) show(+e.target.dataset.slide);
+    else if (e.target.closest('#abBox')) { clearInterval(typer); $('#abText').textContent = ABOUT[i].text; }
+  };
+  body.onkeydown = e => {
+    if (e.key === 'ArrowRight') { e.preventDefault(); i === ABOUT.length - 1 ? $('#modal').close() : show(i + 1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); show(i - 1); }
+  };
+  show(i);
+  $('#abNext').focus();
+}
+
+// ---------- ⚙ Opciones ----------
+function showOptions() {
+  const p = state.prefs;
+  const sizes = [11, 12, 13, 14, 15, 16, 18, 20];
+  openModal('⚙ Opciones', `
+    <h4 class="opt-head">Tema</h4>
+    <div class="themes">${Object.entries(THEMES).map(([k, t]) => `
+      <button class="theme-card${p.theme === k ? ' on' : ''}" data-theme-pick="${k}" aria-pressed="${p.theme === k}">
+        <span class="theme-prev" data-prev="${k}"><i></i><i></i><i></i><u></u></span>
+        <b>${t.name}</b><small>${t.desc}</small>
+      </button>`).join('')}</div>
+    <h4 class="opt-head">Terminal</h4>
+    <label class="opt-row">Tamaño de letra
+      <select id="optFont">${sizes.map(n => `<option value="${n}"${n === p.fontSize ? ' selected' : ''}>${n} px</option>`).join('')}</select>
+    </label>
+    ${window.desktop ? `<h4 class="opt-head">Ventana</h4>
+    <label class="opt-row"><input type="checkbox" id="optFull"${p.startFullscreen ? ' checked' : ''}> Abrir en pantalla completa</label>
+    <p class="muted">F11 activa o desactiva la pantalla completa en cualquier momento.</p>` : ''}
+    <h4 class="opt-head">Acerca de</h4>
+    <button class="xpbtn primary" id="optAbout">📖 Cómo funciona Agent Map (guía paso a paso)</button>
+    <p class="picker-msg" id="optMsg" role="alert"></p>`);
+  const body = $('#modalBody');
+  const save = async patch => {
+    try { await savePrefs(patch); $('#optMsg').textContent = ''; }
+    catch (err) { $('#optMsg').textContent = err.message; }
+  };
+  body.onclick = async e => {
+    if (e.target.id === 'optAbout') return showAbout();
+    const b = e.target.closest('[data-theme-pick]');
+    if (!b) return;
+    await save({ theme: b.dataset.themePick });
+    body.querySelectorAll('[data-theme-pick]').forEach(x => {
+      const on = x.dataset.themePick === state.prefs.theme;
+      x.classList.toggle('on', on);
+      x.setAttribute('aria-pressed', on);
+    });
+  };
+  body.onchange = e => {
+    if (e.target.id === 'optFont') save({ fontSize: Number(e.target.value) });
+    if (e.target.id === 'optFull') save({ startFullscreen: e.target.checked });
+  };
+}
+
 // ---------- selección y apertura ----------
 function selectSession(id, force = false) {
   state.selected = id; state.selectedSub = null;
@@ -143,19 +372,20 @@ function selectSession(id, force = false) {
   renderAll();
 }
 
-function openTerm(params, label, sessionId) {
+function openTerm(params, label, sessionId, cwd = "") {
   const el = document.createElement('div');
   el.className = 'term';
   $('#stage').appendChild(el);
   const term = new Terminal({
-    fontFamily: '"Cascadia Mono", Consolas, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000,
-    theme: { background: '#0c0c0c', foreground: '#e6e6e6', selectionBackground: '#316ac5' },
+    fontFamily: '"Cascadia Mono", Consolas, monospace', fontSize: state.prefs.fontSize, cursorBlink: true, scrollback: 5000,
+    theme: THEMES[state.prefs.theme].term,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open(el);
   let key = params.key || 'tmp-' + Date.now();
-  const t = { term, fit, el, label, sessionId, ws: null };
+  // cwd: para saber si la terminal es de un proyecto con equipo de agentes
+  const t = { term, fit, el, label, sessionId, ws: null, cwd: cwd || params.newIn || (sessionId && findSession(sessionId)?.cwd) || '' };
   state.terms.set(key, t);
   showTerm(key);
   fit.fit();
@@ -176,9 +406,27 @@ function openTerm(params, label, sessionId) {
     term.write(ev.data);
   };
   ws.onclose = ev => { if (ev.code >= 4000) term.write(`\r\n\x1b[31m${ev.reason}\x1b[0m\r\n`); };
-  term.onData(d => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'in', d })));
+  const send = d => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'in', d }));
+  term.onData(send);
+  // Copiar/pegar como en Windows Terminal: Ctrl+C copia si hay selección (si no, interrumpe), Ctrl+V pega.
+  // Sin texto en el portapapeles se manda ^V tal cual: así Claude Code puede pegar una imagen.
+  const paste = async () => { const text = await readClipboard(); text ? term.paste(text) : send('\x16'); };
+  const copy = () => { writeClipboard(term.getSelection()); term.clearSelection(); };
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type !== 'keydown' || !e.ctrlKey || e.altKey || e.metaKey) return true;
+    const k = e.key.toLowerCase();
+    if (k === 'v') { e.preventDefault(); paste(); return false; }
+    if (k === 'c' && (term.hasSelection() || e.shiftKey)) { e.preventDefault(); if (term.hasSelection()) copy(); return false; }
+    return true;
+  });
+  // Click derecho: copia la selección o, sin selección, pega.
+  el.addEventListener('contextmenu', e => { e.preventDefault(); term.hasSelection() ? copy() : paste(); term.focus(); });
   term.onResize(({ cols, rows }) => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'resize', cols, rows })));
 }
+
+// En la app de escritorio el portapapeles va por el proceso principal; en el navegador, por la API web.
+const readClipboard = () => (window.desktop ? window.desktop.readClipboard() : navigator.clipboard.readText()).catch(() => '');
+const writeClipboard = text => window.desktop ? window.desktop.writeClipboard(text) : navigator.clipboard.writeText(text).catch(() => {});
 
 function showTerm(key) {
   state.active = key;
@@ -189,6 +437,7 @@ function showTerm(key) {
   $('#closeTerm').hidden = false;
   requestAnimationFrame(() => { t.fit.fit(); t.term.focus(); });
   renderTasks();
+  pollTeam();
 }
 
 async function closeTerm(key) {
@@ -229,6 +478,7 @@ function showHome(warnFor) {
         <input id="newDir" readonly value="${esc(state.newDir)}" placeholder="Elige dónde trabajará Claude…" title="${esc(state.newDir)}">
         <button class="xpbtn" id="pickBtn">📁 Elegir carpeta…</button>
         <button class="xpbtn primary" id="newBtn" ${state.newDir ? '' : 'disabled'}>＋ Iniciar Claude</button>
+        <button class="xpbtn" id="teamBtn" ${state.newDir ? '' : 'disabled'} title="1 jefe + 2 agentes con nombre, cargo e instrucciones">👥 Iniciar con equipo…</button>
       </div>
       <h3 style="margin:16px 0 0;color:var(--group-text)">Recientes</h3>
       <div class="tiles">${recent.map(s => `
@@ -251,7 +501,267 @@ $('#home').addEventListener('click', e => {
   if (e.target.id === 'newBtn' && state.newDir) {
     openTerm({ newIn: state.newDir }, 'Nueva · ' + baseName(state.newDir), null);
   }
+  if (e.target.id === 'teamBtn' && state.newDir) showTeamForm(state.newDir);
 });
+
+// ---------- equipo de agentes: crear ----------
+const TEAM_TEMPLATES = {
+  juego: { label: '🎮 Videojuego',
+    boss: { name: 'Jefe', instructions: 'Diriges el desarrollo de un videojuego. Mantén el juego siempre jugable: primero lo mínimo que funcione, después se mejora.' },
+    agents: [
+      { name: 'Programador', role: 'Programación del juego', instructions: 'Programas la lógica del juego: movimiento, colisiones, niveles, menús y guardado. Código simple y probado.' },
+      { name: 'Artista', role: 'Gráficos y sprites', instructions: 'Creas los gráficos: sprites, fondos, animaciones e íconos, con un estilo visual coherente. Entregas los archivos listos para usar en el juego.' },
+    ] },
+  web: { label: '🌐 Página o app web',
+    boss: { name: 'Jefe', instructions: 'Diriges el desarrollo de una página o app web. Prioriza que se vea bien en celular y que cargue rápido.' },
+    agents: [
+      { name: 'Frontend', role: 'Interfaz y diseño', instructions: 'Construyes lo que ve el usuario: páginas, estilos, formularios y que todo sea accesible y responsive.' },
+      { name: 'Backend', role: 'Servidor y datos', instructions: 'Construyes el servidor, la base de datos y las APIs. Validas todo lo que llega del usuario.' },
+    ] },
+  inversa: { label: '🔍 Ingeniería inversa (entender un programa)',
+    boss: { name: 'Jefe', instructions: 'Dirigen el análisis de un programa propio o con permiso para estudiarlo, del que no hay documentación. El objetivo es entender cómo funciona y dejarlo explicado y comprobado. Reparte por módulos: mientras uno analiza el módulo siguiente, el otro documenta y comprueba el anterior.' },
+    agents: [
+      { name: 'Analista', role: 'Lee y desarma el código', instructions: 'Lees el código (o el binario descompilado) módulo por módulo: qué hace cada parte, cómo fluyen los datos, formatos de archivos y protocolos. Anotas lo que descubres en docs/analisis/<módulo>.md con referencias a archivos y líneas.' },
+      { name: 'Documentador', role: 'Documenta y comprueba', instructions: 'Tomas el análisis de un módulo y lo conviertes en documentación clara (docs/<módulo>.md) y en pruebas que confirman el comportamiento descrito. Si una prueba contradice el análisis, lo reportas al jefe.' },
+    ] },
+  migracion: { label: '🔄 Migración o modernización de código',
+    boss: { name: 'Jefe', instructions: 'Dirigen la migración de un proyecto (versión nueva de un lenguaje, framework o librería). Avancen módulo por módulo y nunca dejen el proyecto sin compilar.' },
+    agents: [
+      { name: 'Migrador', role: 'Actualiza el código', instructions: 'Migras un módulo a la vez a la nueva versión, con cambios mínimos y sin cambiar el comportamiento.' },
+      { name: 'Verificador', role: 'Pruebas antes y después', instructions: 'Antes de que se migre un módulo, escribes pruebas que fijan su comportamiento actual. Después, compruebas que siguen pasando y reportas cualquier diferencia.' },
+    ] },
+  investigacion: { label: '📚 Investigación y redacción',
+    boss: { name: 'Jefe', instructions: 'Dirigen un informe o documento bien fundamentado. Divide el tema en secciones: mientras se investiga la siguiente, se redacta la anterior.' },
+    agents: [
+      { name: 'Investigador', role: 'Busca y verifica fuentes', instructions: 'Buscas información confiable sobre cada sección, la verificas y guardas notas con las fuentes en notas/<sección>.md.' },
+      { name: 'Redactor', role: 'Escribe el documento', instructions: 'Con las notas de cada sección, escribes un texto claro y ordenado en el documento final, citando las fuentes.' },
+    ] },
+  datos: { label: '📊 Análisis de datos',
+    boss: { name: 'Jefe', instructions: 'Dirigen el análisis de un conjunto de datos para responder preguntas concretas. Primero datos limpios, después conclusiones.' },
+    agents: [
+      { name: 'Ingeniero de datos', role: 'Limpia y prepara los datos', instructions: 'Cargas, limpias y validas los datos (duplicados, faltantes, formatos) y dejas tablas listas para analizar, con un script reproducible.' },
+      { name: 'Analista', role: 'Gráficos y conclusiones', instructions: 'Con las tablas limpias, haces los cálculos y gráficos que responden cada pregunta y escribes las conclusiones en lenguaje simple.' },
+    ] },
+  seguridad: { label: '🛡 Revisión de seguridad del propio código',
+    boss: { name: 'Jefe', instructions: 'Dirigen una revisión de seguridad de este proyecto. Mientras se revisa una parte, se corrige la anterior. Prioriza por gravedad.' },
+    agents: [
+      { name: 'Auditor', role: 'Busca vulnerabilidades', instructions: 'Revisas el código parte por parte buscando fallas: entradas sin validar, secretos expuestos, permisos de más, dependencias vulnerables. Anotas cada hallazgo con su gravedad y cómo reproducirlo, sin explotarlo.' },
+      { name: 'Reparador', role: 'Corrige con pruebas', instructions: 'Tomas cada hallazgo, escribes una prueba que lo demuestra, lo corriges con el cambio mínimo y confirmas que la prueba pasa.' },
+    ] },
+  vacio: { label: '✏️ En blanco', boss: { name: 'Jefe', instructions: '' },
+    agents: [{ name: '', role: '', instructions: '' }, { name: '', role: '', instructions: '' }] },
+};
+
+function showTeamForm(dir) {
+  const field = (id, label, value, opts = '') => `<label class="tf"><span>${label}</span><input id="${id}" value="${esc(value)}" ${opts}></label>`;
+  const area = (id, label, value, ph) => `<label class="tf"><span>${label}</span><textarea id="${id}" rows="3" maxlength="4000" placeholder="${esc(ph)}">${esc(value)}</textarea></label>`;
+  const fill = tpl => {
+    const t = TEAM_TEMPLATES[tpl];
+    $('#tmBossName').value = t.boss.name; $('#tmBossIns').value = t.boss.instructions;
+    t.agents.forEach((a, i) => { $(`#tmA${i}Name`).value = a.name; $(`#tmA${i}Role`).value = a.role; $(`#tmA${i}Ins`).value = a.instructions; });
+  };
+  // Proyectos conocidos que están DENTRO de esta carpeta (heredarían el CLAUDE.md del equipo).
+  const norm = p => p.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+  const inside = state.projects.filter(p => norm(p.cwd).startsWith(norm(dir) + '\\')).map(p => p.name);
+  openModal('👥 Iniciar con equipo · ' + baseName(dir), `<form class="teamform">
+      <p class="muted">Un <b>jefe</b> (la terminal donde tú escribes) reparte el trabajo entre <b>2 agentes</b> que pueden trabajar al mismo tiempo.
+      Se crean <code>CLAUDE.md</code>, <code>TAREAS.md</code> y <code>.claude/agents/</code> en <code>${esc(dir)}</code>.</p>
+      ${inside.length ? `<div class="hint warn-box" role="alert">⚠ <b>Esta carpeta contiene otros proyectos</b> (${inside.slice(0, 4).map(esc).join(', ')}${inside.length > 4 ? '…' : ''}).
+        Claude lee el <code>CLAUDE.md</code> de las carpetas de arriba, así que este equipo aparecería también en todos ellos.
+        Lo normal es elegir la carpeta de <b>un</b> proyecto.
+        <label class="opt-row"><input type="checkbox" id="tmInsideOk"> Entiendo, crear el equipo aquí de todos modos</label></div>` : ''}
+      <label class="tf"><span>Plantilla</span><select id="tmTpl">${Object.entries(TEAM_TEMPLATES).map(([k, t]) => `<option value="${k}">${t.label}</option>`).join('')}</select></label>
+      <fieldset class="tm"><legend><img src="${portraits()[0]}" alt=""> Jefe</legend>
+        ${field('tmBossName', 'Nombre', '', 'maxlength="40" required')}
+        ${area('tmBossIns', 'Instrucciones', '', 'De qué trata el proyecto y cómo quieres que dirija (opcional)')}
+      </fieldset>
+      ${[0, 1].map(i => `<fieldset class="tm"><legend><img src="${portraits()[i + 1]}" alt=""> Agente ${i + 1}</legend>
+        <div class="tf-row">${field(`tmA${i}Name`, 'Nombre', '', 'maxlength="40" required')}${field(`tmA${i}Role`, 'Cargo', '', 'maxlength="60" required')}</div>
+        ${area(`tmA${i}Ins`, 'Instrucciones', '', 'Ej.: Eres el encargado de testear el juego…')}
+      </fieldset>`).join('')}
+      <p class="picker-msg" id="tmMsg" role="alert"></p>
+      <div class="modal-actions">
+        <button type="button" class="xpbtn" data-close-modal>Cancelar</button>
+        <button class="xpbtn primary">👥 Crear equipo e iniciar</button>
+      </div>
+    </form>`, { sticky: true });
+  fill('juego');
+  $('#tmTpl').onchange = e => fill(e.target.value);
+  $('#modalBody form').onsubmit = async e => {
+    e.preventDefault();
+    if (inside.length && !$('#tmInsideOk').checked) { $('#tmMsg').textContent = 'Marca "Entiendo…" o elige la carpeta de un solo proyecto.'; return; }
+    const body = {
+      dir,
+      boss: { name: $('#tmBossName').value, instructions: $('#tmBossIns').value },
+      agents: [0, 1].map(i => ({ name: $(`#tmA${i}Name`).value, role: $(`#tmA${i}Role`).value, instructions: $(`#tmA${i}Ins`).value })),
+    };
+    try {
+      const r = await fetch('/api/team', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      if (!r.ok) throw new Error(await r.text() || 'No se pudo crear el equipo');
+      $('#modal').close();
+      teamMiss.delete(dir);
+      openTerm({ newIn: dir }, 'Equipo · ' + baseName(dir), null);
+    } catch (err) { $('#tmMsg').textContent = err.message; }
+  };
+}
+
+// ---------- equipo de agentes: estado en vivo (fichas a la izquierda, oficina a la derecha) ----------
+let _portraits, _office, _officeWrap;
+const portraits = () => _portraits ||= [0, 1, 2].map(i => Office.portrait(i));
+function officeWrap() { // un solo canvas (con sus globos) que sobrevive a los re-render del panel derecho
+  if (!_officeWrap) {
+    _officeWrap = document.createElement('div');
+    _officeWrap.className = 'office-wrap';
+    const cv = document.createElement('canvas');
+    cv.className = 'office';
+    cv.setAttribute('role', 'img');
+    cv.setAttribute('aria-label', 'Oficina del equipo: muestra quién está trabajando y quién duerme. Pasa el mouse sobre alguien para ver qué hace.');
+    _officeWrap.appendChild(cv);
+    _office = new Office(cv);
+    // En pantalla completa se ven los globos de todos; anclada, solo al pasar el mouse.
+    _office.bubbles(_officeWrap, i => Office.info(state.team?.data, i, _office.night()), () => document.fullscreenElement === _officeWrap);
+    _office.nightLabel(_officeWrap);
+    _office.setNight(Office.waitUntil(usage));
+    const exit = document.createElement('button');
+    exit.className = 'xpbtn small office-exit';
+    exit.textContent = '✕ Salir de pantalla completa (Esc)';
+    exit.onclick = () => document.exitFullscreen();
+    _officeWrap.appendChild(exit);
+  }
+  return _officeWrap;
+}
+
+// Oficina en otra ventana (para moverla a otro monitor). Las dos páginas se avisan por este canal.
+const officeChannel = 'BroadcastChannel' in window ? new BroadcastChannel('agentmap-office') : null;
+let officeWin = null;
+function setDetached(on) {
+  if (state.officeDetached === on) return;
+  state.officeDetached = on;
+  if (!on && officeWin && !officeWin.closed) officeWin.close();
+  if (!on) officeWin = null;
+  renderStats();
+}
+document.addEventListener('keydown', e => { // Esc saca a la oficina de pantalla completa
+  if (e.key === 'Escape' && _officeWrap && document.fullscreenElement === _officeWrap) { e.preventDefault(); document.exitFullscreen(); }
+}, true);
+officeChannel?.addEventListener('message', e => { if (e.data?.type === 'closed' || e.data?.type === 'dock') setDetached(false); });
+setInterval(() => { if (state.officeDetached && officeWin?.closed) setDetached(false); }, 1000);
+
+$('#stats').addEventListener('click', e => {
+  const b = e.target.closest('[data-office]');
+  if (!b || !state.team) return;
+  const act = b.dataset.office;
+  if (act === 'full') officeWrap().requestFullscreen?.();
+  else if (act === 'detach') {
+    officeWin = window.open('/office.html?dir=' + encodeURIComponent(state.team.dir), 'agentmap-office', 'width=960,height=760');
+    if (officeWin) setDetached(true);
+  } else if (act === 'dock') { officeChannel?.postMessage({ type: 'dock' }); setDetached(false); }
+});
+const teamMiss = new Map(); // carpeta -> cuándo se vio que no tiene equipo (para no preguntar cada 1,5 s)
+let teamWrites = {};
+
+async function pollTeam() {
+  const dir = state.terms.get(state.active)?.cwd;
+  if (!dir || (state.team?.dir !== dir && Date.now() - (teamMiss.get(dir) || 0) < 20000)) return setTeam(null);
+  try {
+    const data = await (await fetch('/api/team?dir=' + encodeURIComponent(dir))).json();
+    if (state.terms.get(state.active)?.cwd !== dir) return; // cambió de terminal mientras tanto
+    if (!data) { teamMiss.set(dir, Date.now()); return setTeam(null); }
+    setTeam({ dir, data });
+  } catch { /* servidor ocupado: se reintenta en el próximo ciclo */ }
+}
+setInterval(pollTeam, 1500);
+
+function setTeam(team) {
+  const before = state.team?.dir;
+  state.team = team;
+  $('#tabTeam').hidden = !team;
+  if (!team) {
+    if (state.leftTab === 'team') setLeftTab('tree');
+    if (before) renderStats();
+    return;
+  }
+  const m = team.data.members;
+  if (team.dir !== before) { teamWrites = {}; state.teamSel = 'boss'; setLeftTab('team'); renderStats(); }
+  officeWrap();
+  _office.setWorking(m.map(x => x.state === 'working'));
+  m.slice(1).forEach((x, i) => { // escribió un archivo nuevo: a veces va a "imprimirlo"
+    if (teamWrites[x.key] !== undefined && x.writes > teamWrites[x.key]) _office.ping(i + 1);
+    teamWrites[x.key] = x.writes;
+  });
+  renderTeam();
+  renderOfficeLegend();
+}
+
+function setLeftTab(tab) {
+  state.leftTab = tab;
+  for (const [id, name] of [['#tabTree', 'tree'], ['#tabTeam', 'team']]) {
+    $(id).classList.toggle('on', tab === name);
+    $(id).setAttribute('aria-selected', tab === name);
+  }
+  $('#tree').hidden = tab !== 'tree';
+  $('#team').hidden = tab !== 'team';
+  if (tab === 'team') renderTeam();
+}
+$('#tabTree').onclick = () => setLeftTab('tree');
+$('#tabTeam').onclick = () => setLeftTab('team');
+
+const clock = ts => ts ? new Date(ts).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+function memberState(x, data) {
+  if (_office?.night()) return '🌙 Durmiendo: esperando tokens nuevos';
+  if (x.state === 'working') return '💻 ' + Office.thought(x, data.members, data.live) + (x.since ? ' · ⏱ ' + Office.elapsed(x.since) : '');
+  if (x.key === 'boss') return data.live ? '😴 Esperando tu instrucción' : '😴 Claude no está abierto aquí';
+  return x.finishedAt ? '😴 Terminó ' + ago(x.finishedAt) : '😴 Esperando tareas';
+}
+
+function renderTeam() {
+  const el = $('#team');
+  if (!state.team || el.hidden) return;
+  const { data } = state.team;
+  const sel = data.members.find(x => x.key === state.teamSel) || data.members[0];
+  const prev = $('#feed');
+  const stick = !prev || prev.scrollHeight - prev.scrollTop - prev.clientHeight < 24; // seguir abajo si ya estaba abajo
+  const top = prev?.scrollTop;
+  el.innerHTML = `
+    <div class="members">${data.members.map((x, i) => `
+      <button class="member${x === sel ? ' sel' : ''} ${x.state}" data-member="${esc(x.key)}" aria-pressed="${x === sel}">
+        <img class="portrait" src="${portraits()[i]}" alt="">
+        <span class="member-info"><b>${esc(x.name)}</b><small>${esc(x.role)}</small>
+          <span class="member-state" title="${esc(memberState(x, data))}">${esc(memberState(x, data))}</span></span>
+      </button>`).join('')}</div>
+    <div class="feed-head">${sel.key === 'boss' ? '🧑‍💼 Actividad del jefe · le escribes en la terminal del centro' : `👀 Lo que hace ${esc(sel.name)} · solo lectura`}</div>
+    <div id="feed" class="feed" aria-live="polite">${sel.feed.length
+      ? sel.feed.map(f => `<div class="ev"><span class="ev-i">${f.icon}</span><span class="ev-t">${esc(f.text)}</span><small>${clock(f.ts)}</small></div>`).join('')
+      : `<p class="muted">${sel.key === 'boss' ? 'Escríbele al jefe en la terminal del centro: qué quieres hacer.' : 'Todavía no le han encargado nada en esta sesión.'}</p>`}</div>`;
+  const feed = $('#feed');
+  feed.scrollTop = stick ? feed.scrollHeight : top;
+}
+$('#team').addEventListener('click', e => {
+  const b = e.target.closest('[data-member]');
+  if (!b) return;
+  state.teamSel = b.dataset.member;
+  renderTeam();
+});
+
+function renderOfficeLegend() {
+  const el = $('#officeLegend');
+  if (!el || !state.team) return;
+  el.innerHTML = state.team.data.members.map((x, i) =>
+    `<span><img src="${portraits()[i]}" alt=""> ${esc(x.name)} ${x.state === 'working' && !_office?.night() ? '💻 ' + esc(Office.elapsed(x.since)) : '😴'}</span>`).join('') +
+    '<span class="muted">Pasa el mouse sobre alguien para ver qué hace.</span>';
+}
+function mountOffice() {
+  if (!state.team) return;
+  const tools = state.officeDetached
+    ? '<button class="xpbtn small" data-office="dock" title="Cerrar la ventana aparte y volver a mostrarla aquí">📌 Anclar aquí</button>'
+    : `<button class="xpbtn small" data-office="full" title="Ver la oficina en pantalla completa (Esc para volver)">⛶ Pantalla completa</button>
+       <button class="xpbtn small" data-office="detach" title="Abrir la oficina en su propia ventana (puedes moverla a otro monitor)">⧉ Separar</button>`;
+  $('#stats').insertAdjacentHTML('afterbegin', group('🏢 Oficina', `<div class="office-tools">${tools}</div>` + (state.officeDetached
+    ? '<p class="muted office-away">La oficina está abierta en otra ventana.</p>'
+    : '<div id="officeSlot" class="office-slot"></div>') + '<div id="officeLegend" class="office-legend"></div>', 'Oficina'));
+  if (!state.officeDetached) $('#officeSlot').appendChild(officeWrap());
+  renderOfficeLegend();
+}
 
 const baseName = p => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p;
 
@@ -335,7 +845,28 @@ function bars(obj, max = 8) {
   return rows.map(([k, v]) => `<div class="bar"><span class="name">${esc(k)}</span>
     <div class="track"><div class="fill" style="width:${(v / top) * 100}%"></div></div><span class="n">${fmt(v)}</span></div>`).join('');
 }
-const group = (h, body) => `<section class="group"><h3>${h}</h3><div>${body}</div></section>`;
+// Secciones plegables: click en el título. Se recuerda por nombre (sin el contador entre paréntesis).
+const collapsed = new Set(store.get('collapsed', []));
+const groupKey = h => h.replace(/<[^>]*>/g, '').replace(/\s*\(\d+\)\s*$/, '').trim();
+const group = (h, body, key = groupKey(h)) => {
+  const closed = collapsed.has(key);
+  return `<section class="group${closed ? ' closed' : ''}"><h3><button type="button" class="group-toggle" data-group="${esc(key)}" aria-expanded="${!closed}">${h}</button></h3><div>${body}</div></section>`;
+};
+document.addEventListener('click', e => {
+  const b = e.target.closest('.group-toggle');
+  if (!b) return;
+  if (e.target.closest('[data-jump-unread]')) { // el globito rojo lleva al primer mensaje nuevo (sin plegar la sección)
+    if (b.closest('.group').classList.contains('closed')) b.click();
+    const first = $('#convo .msg.unread');
+    first?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    first?.focus({ preventScroll: true });
+    return;
+  }
+  const closed = b.closest('.group').classList.toggle('closed');
+  b.setAttribute('aria-expanded', !closed);
+  closed ? collapsed.add(b.dataset.group) : collapsed.delete(b.dataset.group);
+  store.set('collapsed', [...collapsed]);
+});
 const kv = rows => `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd title="${esc(v)}">${esc(v)}</dd>`).join('')}</dl>`;
 function sum(objs) {
   const out = {};
@@ -343,7 +874,9 @@ function sum(objs) {
   return out;
 }
 
-function renderStats() {
+// Panel derecho: la oficina (si la terminal activa tiene equipo) arriba de los datos de la sesión.
+function renderStats() { renderStatsInner(); mountOffice(); }
+function renderStatsInner() {
   const box = $('#stats');
   const s = state.selected && findSession(state.selected);
   if (!s) {
@@ -371,12 +904,13 @@ function renderStats() {
     group('📄 ' + esc(title(s)), kv([
       ['Proyecto', s.project.name], ['Rama', s.branch || '—'], ['Estado', dotTitle(s)],
       ['Inicio', dateTime(s.start)], ['Última actividad', dateTime(s.end)], ['Duración', duration(s.start, s.end)],
-    ])) +
+    ]), 'Datos de la sesión') +
     group('💬 Qué pasó', `<small>Primer prompt</small>${promptBtn(s.firstPrompt, 'first')}
       <small>Último prompt</small>${promptBtn(s.lastPrompt, 'last')}
       ${kv([['Prompts tuyos', s.prompts], ['Respuestas de Claude', s.assistantMsgs]])}`) +
-    group('🗨 Conversación' + (c?.list ? ` (${c.list.length})` : ''),
-      `<div id="convo" class="convo" data-id="${esc(s.id)}" data-n="${c?.list?.length ?? ''}">${c?.list ? convoHtml(c.list) : '<small>Cargando…</small>'}</div>`) +
+    group('🗨 Conversación' + (c?.list ? ` (${c.list.length})` : '') +
+      ((u => u ? ` <span class="unread-badge jump" data-jump-unread title="${u} respuesta${u > 1 ? 's' : ''} nueva${u > 1 ? 's' : ''} de Claude: click para ir">+${u > 99 ? '99' : u}</span>` : '')(c?.list ? unreadInList(c.list, s) : unreadOf(s))),
+      `<div id="convo" class="convo" data-id="${esc(s.id)}" data-n="${c?.list?.length ?? ''}">${c?.list ? convoHtml(c.list, s) : '<small>Cargando…</small>'}</div>`, 'Conversación') +
     group('🤖 Agentes usados (' + s.subagents.length + ')', s.subagents.length
       ? s.subagents.slice(-6).reverse().map(a => `<div class="agent"><b>${agentLink(a.type)}</b> · ${ago(a.time)}<br>${esc(a.description)}</div>`).join('')
       : '<small>Esta sesión no usó subagentes.</small>');
@@ -396,11 +930,42 @@ function messages(s) {
   promise.then(list => { if (state.convo?.promise === promise) state.convo.list = list; }, () => {});
   return promise;
 }
-const who = m => m.role === 'user' ? '🧑 Tú' : '🤖 Claude';
-const convoHtml = list => list.length
-  ? list.map((m, i) => `<button class="msg ${m.role}" data-msg="${i}" title="Ver el mensaje completo">
-      <b>${who(m)}</b> <small>${esc(ago(m.ts))}</small><span>${esc(m.text.slice(0, 600))}</span></button>`).join('')
-  : '<small>Sin mensajes de texto.</small>';
+// ---------- mensajes nuevos, como en Messenger: respuestas de Claude que todavía no abriste ----------
+const seen = store.get('seen', {});  // id de sesión -> cuántas respuestas de Claude ya leíste
+const flashed = new Set();           // "id:n" que ya parpadearon: parpadean una sola vez
+function syncSeen() {
+  // La primera vez se da por leído todo lo que ya existía; después, una sesión nueva empieza sin leer.
+  const firstTime = !Object.keys(seen).length;
+  let changed = false;
+  for (const s of allSessions()) if (seen[s.id] == null) { seen[s.id] = firstTime ? s.claudeMsgs || 0 : 0; changed = true; }
+  if (changed) store.set('seen', seen);
+}
+const unreadOf = s => Math.max(0, (s.claudeMsgs || 0) - (seen[s.id] ?? s.claudeMsgs ?? 0));
+const unreadBadge = (n, title) => n ? `<span class="unread-badge" title="${esc(title)}">${n > 99 ? '99+' : n}</span>` : '';
+function markRead(id, n) {
+  if (n <= (seen[id] || 0)) return;
+  seen[id] = n;
+  store.set('seen', seen);
+  renderTree(); renderStats();
+}
+
+const who = m => m.role === 'user' ? 'Tú' : 'Claude';
+function convoHtml(list, s) {
+  if (!list.length) return '<small>Sin mensajes de texto.</small>';
+  const read = seen[s.id] ?? 0;
+  let ord = 0; // número de respuesta de Claude
+  return list.map((m, i) => {
+    const n = m.role === 'assistant' ? ord++ : -1;
+    let cls = '';
+    if (n >= read) {
+      cls = ' unread';
+      if (!flashed.has(s.id + ':' + n)) { flashed.add(s.id + ':' + n); cls += ' flash'; } // parpadea 3 veces y queda marcado
+    }
+    return `<div class="msg-row ${m.role}"><button class="msg ${m.role}${cls}" data-msg="${i}" data-ord="${n}" title="Ver el mensaje completo">
+      <b>${who(m)} dice:</b> <small>${esc(ago(m.ts))}</small>${n >= read ? ' <em class="new-tag">NUEVO</em>' : ''}<span>${esc(m.text.slice(0, 600))}</span></button></div>`;
+  }).join('');
+}
+const unreadInList = (list, s) => Math.max(0, list.filter(m => m.role === 'assistant').length - (seen[s.id] ?? 0));
 
 // Prompt resumido; al hacer click abre el texto completo en el modal.
 const promptBtn = (text, which) => text
@@ -417,14 +982,16 @@ function agentLink(type) {
 
 // ---------- modal ----------
 let modalSeq = 0; // cuenta modales abiertos: distingue el modal actual de uno ya reemplazado
-function openModal(heading, html) {
+// sticky: formularios que no se cierran con click afuera ni con Esc (solo con Cancelar o ×).
+function openModal(heading, html, { sticky = false } = {}) {
   modalSeq++;
   const m = $('#modal');
   if (m.open) m.close(); // resuelve lo que esperaba el modal anterior
   m.returnValue = '';
+  m.dataset.sticky = sticky ? '1' : '';
   $('#modalTitle').textContent = heading;
   const body = $('#modalBody');
-  body.onclick = body.onkeydown = null; // quita los handlers del modal anterior (p. ej. el explorador)
+  body.onclick = body.onkeydown = body.onchange = null; // quita los handlers del modal anterior (p. ej. el explorador)
   body.innerHTML = html;
   m.showModal();
 }
@@ -444,16 +1011,22 @@ function confirmModal(heading, messageHtml, okLabel) {
     resolve(seq === modalSeq && m.returnValue === 'ok');
   }));
 }
+// Cierra con la × o con click en el fondo oscuro. El click tiene que EMPEZAR en el fondo: si apretaste dentro
+// (p. ej. seleccionando texto de un campo) y soltaste afuera, no se cierra.
+let modalDownOnBackdrop = false;
+$('#modal').addEventListener('pointerdown', e => { modalDownOnBackdrop = e.target === $('#modal'); });
 $('#modal').addEventListener('click', e => {
-  // click en el fondo oscuro o en la ×
-  if (e.target === $('#modal') || e.target.closest('[data-close-modal]')) $('#modal').close();
+  if (e.target.closest('[data-close-modal]')) return $('#modal').close();
+  if (e.target === $('#modal') && modalDownOnBackdrop && !$('#modal').dataset.sticky) $('#modal').close();
 });
+$('#modal').addEventListener('cancel', e => { if ($('#modal').dataset.sticky) e.preventDefault(); }); // Esc
 
 $('#stats').addEventListener('click', async e => {
   const m = e.target.closest('[data-msg]');
   if (m) {
     const msg = state.convo?.list?.[+m.dataset.msg];
     if (msg) openModal(`${who(msg)} · ${dateTime(msg.ts)}`, `<div class="prompt-full">${esc(msg.text)}</div>`);
+    if (+m.dataset.ord >= 0) markRead(state.convo.id, +m.dataset.ord + 1); // abrir una respuesta nueva la da por leída (y las anteriores)
     return;
   }
   const b = e.target.closest('[data-prompt]');
@@ -486,6 +1059,7 @@ function showUsage() {
       `<div class="chips" style="margin-top:6px">${Object.keys(sum(list.map(x => x.models))).map(m => `<span class="chip">${esc(m)}</span>`).join('')}</div>`));
 }
 $('#usageBtn').onclick = () => { showUsage(); loadPlan(); };
+$('#optionsBtn').onclick = showOptions;
 
 // Plan y límites (5 h / 7 días) que guarda statusline-tap.js desde la statusline de Claude Code.
 function until(ms) {
@@ -552,17 +1126,21 @@ async function load() {
     const r = await fetch('/api/tree');
     const data = await r.json();
     state.projects = data.projects;
+    syncSeen();
     state.repos = data.repos || {};
     // Tras recargar la página, reengancha las terminales que siguen vivas en el servidor.
     if (firstLoad) {
       firstLoad = false;
-      for (const o of data.open) if (o.alive && !state.terms.has(o.key)) openTerm({ key: o.key }, o.label, o.sessionId);
+      for (const o of data.open) if (o.alive && !state.terms.has(o.key)) openTerm({ key: o.key }, o.label, o.sessionId, o.cwd);
       if (!state.active) showHome();
     }
     renderAll();
     if (!state.active && $('#home').hidden === false && !$('#home .warn')) showHome();
   } catch (err) {
-    $('#tree').innerHTML = `<div class="empty">No se pudo leer las sesiones: ${esc(err.message)}</div>`;
+    // "Failed to fetch" = el servidor no respondió (en modo navegador: `npm run web` no está corriendo).
+    $('#tree').innerHTML = `<div class="empty">${err instanceof TypeError
+      ? 'Sin conexión con el servidor de Agent Map.' + (window.desktop ? '' : ' ¿Está corriendo <code>npm run web</code>?') + '<br>Reintentando cada 15 s…'
+      : 'No se pudo leer las sesiones: ' + esc(err.message)}</div>`;
   }
 }
 
@@ -575,13 +1153,97 @@ document.querySelectorAll('[data-filter]').forEach(b => b.onclick = () => {
   state.filter = b.dataset.filter; renderTree();
 });
 $('#refresh').onclick = load;
-$('#fullscreen').onclick = () => document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
-document.addEventListener('fullscreenchange', () => {
+// Pantalla completa (F11 o el botón). En escritorio es la de la ventana; en el navegador, la de la página.
+const toggleFullScreen = () => window.desktop ? window.desktop.toggleFullScreen()
+  : document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+$('#fullscreen').onclick = toggleFullScreen;
+document.addEventListener('keydown', e => { if (e.key === 'F11') { e.preventDefault(); e.stopPropagation(); toggleFullScreen(); } }, true); // captura: antes que la terminal
+document.addEventListener('fullscreenchange', () => { // solo modo navegador
+  if (window.desktop) return;
   $('#fullscreen').textContent = document.fullscreenElement ? '⛶ Salir de pantalla completa' : '⛶ Pantalla completa';
 });
-window.addEventListener('resize', () => { const t = state.terms.get(state.active); t && t.fit.fit(); });
+const fitActive = () => { const t = state.terms.get(state.active); t && t.fit.fit(); };
+window.addEventListener('resize', fitActive);
+
+// ---------- divisores entre paneles ----------
+const PANE = { left: [300, 180], right: [300, 220] }; // [ancho por defecto, mínimo]
+const paneWidth = side => parseFloat($('.panes').style.getPropertyValue('--' + side)) || PANE[side][0];
+function setPane(side, px) {
+  const other = side === 'left' ? 'right' : 'left';
+  const max = $('.panes').clientWidth - paneWidth(other) - 12 - 300; // el centro nunca baja de 300 px
+  $('.panes').style.setProperty('--' + side, Math.round(Math.max(PANE[side][1], Math.min(px, max))) + 'px');
+}
+document.querySelectorAll('.splitter').forEach(sp => {
+  const side = sp.dataset.side;
+  const save = () => { store.set('pane.' + side, paneWidth(side)); fitActive(); };
+  const saved = store.get('pane.' + side, null);
+  if (saved) setPane(side, saved);
+  sp.tabIndex = 0;
+  sp.addEventListener('pointerdown', e => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    sp.setPointerCapture(e.pointerId);
+    sp.classList.add('dragging');
+    document.body.classList.add('resizing');
+    const rect = $('.panes').getBoundingClientRect();
+    // La terminal se reajusta en vivo, como mucho una vez por cuadro.
+    let queued = false;
+    const move = ev => {
+      setPane(side, side === 'left' ? ev.clientX - rect.left - 3 : rect.right - ev.clientX - 3);
+      if (!queued) { queued = true; requestAnimationFrame(() => { queued = false; fitActive(); }); }
+    };
+    sp.addEventListener('pointermove', move);
+    sp.addEventListener('lostpointercapture', () => { // al soltar (o si se cancela el arrastre)
+      sp.removeEventListener('pointermove', move);
+      sp.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+      save();
+    }, { once: true });
+  });
+  sp.addEventListener('dblclick', () => { $('.panes').style.removeProperty('--' + side); save(); });
+  // Teclado: flechas mueven el divisor 20 px.
+  sp.addEventListener('keydown', e => {
+    const d = e.key === 'ArrowLeft' ? -20 : e.key === 'ArrowRight' ? 20 : 0;
+    if (!d) return;
+    e.preventDefault();
+    setPane(side, paneWidth(side) + (side === 'left' ? d : -d));
+    save();
+  });
+});
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }, 1000);
 setInterval(load, 15000);
+
+// ---------- uso del plan en la barra de tareas (y noche en la oficina si se acabaron los tokens) ----------
+let usage = null;
+async function loadUsage() {
+  try { usage = (await (await fetch('/api/usage')).json()).usage || null; } catch { /* se reintenta en el próximo ciclo */ }
+  renderQuota();
+}
+function renderQuota() {
+  const el = $('#quota'), w = usage?.five_hour;
+  const wait = Office.waitUntil(usage);
+  if (_office) _office.setNight(wait);
+  if (!w) { el.hidden = true; return; }
+  el.hidden = false;
+  const now = Date.now(), resetIn = w.resets_at * 1000 - now;
+  if (wait) {
+    el.className = 'quota wait';
+    el.textContent = '🌙 Sin tokens · se renuevan en ' + Office.countdown(wait - now);
+  } else if (resetIn <= 0) { // la ventana ya se reinició y aún no llegan datos nuevos
+    el.className = 'quota';
+    el.textContent = '⏳ Sesión de 5 h renovada';
+  } else {
+    const used = Math.round(w.used_percentage);
+    el.className = 'quota' + (used >= 90 ? ' crit' : used >= 70 ? ' warn' : '');
+    el.textContent = `⏳ Sesión: ${used} % usado · quedan ${100 - used} % · se reinicia en ${until(resetIn)}`;
+  }
+}
+$('#quota').onclick = () => { showUsage(); loadPlan(); };
+loadUsage();
+setInterval(loadUsage, 30000);
+setInterval(renderQuota, 1000); // cuenta regresiva
+// Preferencias primero (tema, nombres): si fallan, se sigue con los valores por defecto.
+fetch("/api/prefs").then(r => r.ok ? r.json() : Promise.reject()).then(p => { state.prefs = p; applyPrefs(); renderAll(); }).catch(() => applyPrefs());
 load();
 
 // ---------- app de escritorio (Electron): botones de ventana y confirmación al cerrar ----------
@@ -589,13 +1251,18 @@ if (window.desktop) {
   const d = window.desktop;
   document.documentElement.classList.add('desktop');
   $('.winbtns').hidden = false;
-  $('#fullscreen').hidden = true; // en escritorio se usa maximizar
   $('#winMin').onclick = d.minimize;
   $('#winMax').onclick = d.maximize;
   $('#winClose').onclick = d.close;
-  const setMax = max => { $('#winMax').textContent = max ? '❐' : '□'; $('#winMax').title = $('#winMax').ariaLabel = max ? 'Restaurar' : 'Maximizar'; };
-  d.isMaximized().then(setMax);
-  d.onMaximizedChange(setMax);
+  const setState = st => {
+    if (!st) return;
+    const restore = st.max || st.full;
+    $('#winMax').textContent = restore ? '❐' : '□';
+    $('#winMax').title = $('#winMax').ariaLabel = st.full ? 'Salir de pantalla completa' : st.max ? 'Restaurar' : 'Maximizar';
+    $('#fullscreen').textContent = st.full ? '⛶ Salir de pantalla completa' : '⛶ Pantalla completa';
+  };
+  d.getState().then(setState);
+  d.onStateChange(setState);
   let asking = false;
   d.onConfirmClose(async openTerms => {
     if (asking) return;

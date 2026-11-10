@@ -61,12 +61,87 @@ test('readable quita recordatorios del sistema y marcas de pegado; readMessages 
   fs.writeFileSync(file, lines.map(l => JSON.stringify(l)).join('\n') + '\n');
   const s = await parseSession(file);
   assert.ok(s.firstPrompt.length < largo.length && s.firstPrompt.endsWith('…'));
+  assert.equal(s.claudeMsgs, 2); // mismo conteo que las respuestas que muestra readMessages (para los avisos de "nuevo")
   assert.deepEqual(await readMessages(file), [
     { role: 'user', text: largo, ts: 't1' },
     { role: 'assistant', text: 'parte 1\n\nparte 2', ts: 't2' },
     { role: 'assistant', text: 'listo', ts: null },
   ]);
   fs.rmSync(dir, { recursive: true });
+});
+
+test('prefs: valida y guarda tema, letra y etiquetas de sesión', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmap-'));
+  process.env.AGENT_MAP_USAGE_FILE = path.join(dir, 'usage.json'); // prefs.json va en la misma carpeta
+  const { readPrefs, updatePrefs, PREFS_FILE } = await import('../lib/prefs.js?prefs-test');
+  assert.equal(PREFS_FILE, path.join(dir, 'prefs.json'));
+  assert.equal(readPrefs().theme, 'xp');
+  const id = '11111111-2222-3333-4444-555555555555';
+  updatePrefs({ theme: 'matrix', fontSize: 15, startFullscreen: false });
+  updatePrefs({ label: { id, name: '  Mi   proyecto ', color: 'green', pinned: true } });
+  let p = readPrefs();
+  assert.deepEqual([p.theme, p.fontSize, p.startFullscreen], ['matrix', 15, false]);
+  assert.deepEqual(p.labels[id], { name: 'Mi proyecto', color: 'green', pinned: true });
+  updatePrefs({ label: { id, name: '', color: null } });
+  assert.deepEqual(readPrefs().labels[id], { pinned: true });
+  updatePrefs({ label: { id, reset: true } });
+  assert.equal(readPrefs().labels[id], undefined);
+  assert.throws(() => updatePrefs({ theme: 'otro' }), /Tema/);
+  assert.throws(() => updatePrefs({ fontSize: 99 }), /rango/);
+  assert.throws(() => updatePrefs({ label: { id: '../x', name: 'a' } }), /Sesión/);
+  assert.throws(() => updatePrefs({ label: { id, color: 'url(x)' } }), /Color/);
+  assert.equal(readPrefs().theme, 'matrix'); // lo inválido no se guarda
+  delete process.env.AGENT_MAP_USAGE_FILE;
+  fs.rmSync(dir, { recursive: true });
+});
+
+test('equipo: valida, crea archivos sin pisar lo ajeno y describe la actividad', async () => {
+  const { slugify, validateTeam, createTeam, readTeam, feedOf } = await import('../lib/team.js');
+  assert.equal(slugify('Diseñadora Gráfica!'), 'disenadora-grafica');
+  const body = { boss: { name: 'Jefa', instructions: 'Hacer un juego de plataformas.' },
+    agents: [{ name: 'Programador', role: 'Código', instructions: 'Programa.' }, { name: 'Artista', role: 'Sprites', instructions: '' }] };
+  assert.throws(() => validateTeam({ ...body, agents: [body.agents[0]] }), /2 agentes/);
+  assert.throws(() => validateTeam({ ...body, agents: [body.agents[0], body.agents[0]] }), /distintos/);
+  assert.throws(() => validateTeam({ ...body, agents: [{ ...body.agents[0], name: 'Explore' }, body.agents[1]] }), /choca/);
+  assert.throws(() => validateTeam({ ...body, boss: { name: '' } }), /jefe/);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmap-'));
+  fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Mi proyecto\nNotas mías.\n');
+  createTeam(dir, body);
+  const md = fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
+  assert.match(md, /^# Mi proyecto\nNotas mías\./); // lo que había se conserva
+  assert.match(md, /Tú eres \*\*Jefa\*\*/);
+  const agent = fs.readFileSync(path.join(dir, '.claude', 'agents', 'programador.md'), 'utf8');
+  assert.match(agent, /^---\nname: programador\ndescription: "Código\. Jefa/);
+  assert.ok(fs.existsSync(path.join(dir, 'TAREAS.md')));
+  assert.deepEqual(readTeam(dir).agents.map(a => a.slug), ['programador', 'artista']);
+  // Volver a crearlo reemplaza la sección del equipo (no la duplica).
+  createTeam(dir, { ...body, boss: { name: 'Jefe Nuevo', instructions: '' } });
+  const md2 = fs.readFileSync(path.join(dir, 'CLAUDE.md'), 'utf8');
+  assert.equal(md2.match(/<!-- agent-map:equipo -->/g).length, 1);
+  assert.match(md2, /Jefe Nuevo/);
+  // Un agente que el usuario ya tenía con el mismo nombre no se pisa.
+  fs.writeFileSync(path.join(dir, '.claude', 'agents', 'tester.md'), 'mío');
+  assert.throws(() => createTeam(dir, { ...body, agents: [body.agents[0], { name: 'Tester', role: 'QA' }] }), /Ya existe/);
+  assert.equal(fs.readFileSync(path.join(dir, '.claude', 'agents', 'tester.md'), 'utf8'), 'mío');
+  fs.rmSync(dir, { recursive: true });
+
+  const { feed, writes } = feedOf([
+    { type: 'user', timestamp: 't0', message: { content: 'haz el nivel 1' } },
+    { type: 'assistant', timestamp: 't1', message: { content: [
+      { type: 'tool_use', name: 'Edit', input: { file_path: 'D:\\juego\\player.gd' } },
+      { type: 'tool_use', name: 'Bash', input: { command: 'godot --test', description: 'Corre las pruebas' } },
+      { type: 'tool_use', name: 'Agent', input: { subagent_type: 'artista', description: 'Sprites del héroe' } },
+      { type: 'text', text: 'Listo.' },
+    ] } },
+  ], { includeUser: true });
+  assert.deepEqual(feed.map(f => f.text), ['Tú: haz el nivel 1', 'Edita player.gd', 'Corre las pruebas', 'Encarga a artista: Sprites del héroe', 'Listo.']);
+  assert.deepEqual(feed.map(f => f.th), ['Leyendo tu pedido', 'Codeando player.gd', 'Probando: Corre las pruebas', 'Encargando a artista', 'Escribiendo el resumen']);
+  const { thoughtOf } = await import('../lib/team.js');
+  assert.equal(thoughtOf('Write', { file_path: 'C:\\j\\sprites\\heroe.png' }), 'Dibujando heroe.png');
+  assert.equal(thoughtOf('mcp__spritecook__generate_game_art'), 'Dibujando un sprite');
+  assert.equal(thoughtOf('Edit', { file_path: '/j/nivel1.tscn' }), 'Armando la escena nivel1.tscn');
+  assert.equal(writes, 1);
 });
 
 test('folders: lista solo carpetas, valida nombres y crea carpetas nuevas', async () => {
@@ -117,4 +192,7 @@ test('servidor: puerto al azar, rechaza Host ajeno y sirve plan/uso', async () =
   assert.equal(status, 403);
   const mk = await fetch(base + '/api/mkdir', { method: 'POST', headers: { origin: 'http://evil.com' }, body: '{}' });
   assert.equal(mk.status, 403);
+  const pr = await fetch(base + '/api/prefs', { method: 'POST', headers: { origin: 'http://evil.com' }, body: '{"theme":"matrix"}' });
+  assert.equal(pr.status, 403); // otra web no puede cambiar preferencias
+  assert.equal((await fetch(base + '/api/prefs')).status, 200);
 });

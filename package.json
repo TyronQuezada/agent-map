@@ -1,7 +1,7 @@
 {
   "name": "agent-map",
   "productName": "Agent Map",
-  "version": "0.3.0",
+  "version": "0.8.0",
   "private": true,
   "description": "Panel para ver y retomar sesiones de Claude Code",
   "author": "Tyron",

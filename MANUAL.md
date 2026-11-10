@@ -36,7 +36,7 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 
 ```
 ┌ Agent Map ─────────────────────────────────────────── _ □ × ┐
-│ [Buscar…]  [Todas|Activas|Hoy|Esta semana] [📊 Uso]  [⟳ Actualizar] │
+│ [Buscar…] [Todas|Activas|Hoy|Esta semana] [📊 Uso] [⚙ Opciones]  [⛶] [⟳] │
 ├──────────────┬──────────────────────────────┬──────────────┤
 │ Sesiones     │  Inicio / Terminal           │ Estadísticas │
 │ (árbol)      │                              │              │
@@ -48,6 +48,13 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 - **Barra de título:** arrástrala para mover la ventana y haz doble click para maximizar. Los botones `_` (minimizar), `□`/`❐` (maximizar/restaurar) y `×` (cerrar) funcionan como en cualquier programa.
 - **Cerrar** (con `×`, Alt+F4 o desde la barra de tareas) pregunta **"¿Seguro que quieres cerrar Agent Map?"** y avisa cuántas terminales se van a detener. Las conversaciones quedan guardadas y puedes retomarlas después.
 - Si abres Agent Map cuando ya está abierto, se enfoca la ventana existente en vez de abrir otra.
+- **Pantalla completa:** Agent Map abre en pantalla completa, como si apretaras F11. **F11** (o el botón ⛶) la activa o desactiva; en pantalla completa, `❐` vuelve a ventana normal. Se puede desactivar en ⚙ Opciones.
+- **⚙ Opciones:**
+  - **Tema:** Windows XP, **Matrix** (letras verdes sobre negro, también en la terminal) o **Noche** (oscuro azulado). Los tres mantienen los 3 paneles y la barra de tareas.
+  - **Tamaño de letra** de la terminal.
+  - **Abrir en pantalla completa** sí o no.
+  - **📖 Cómo funciona Agent Map:** una guía de 10 diapositivas con capturas, como la intro de un videojuego. Avanza con ◀ ▶ o las flechas del teclado; click en el texto lo muestra completo.
+- **Ancho de los paneles:** pasa el mouse por la línea que separa dos paneles (el cursor cambia a ↔), mantén apretado y arrastra. La terminal se reacomoda en vivo mientras arrastras. Doble click en la línea vuelve al ancho original. También se mueve con las flechas ← → si la línea tiene el foco. Agent Map recuerda el ancho la próxima vez.
 
 ---
 
@@ -64,6 +71,15 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 - **Filtros:** Todas, Activas, Hoy, Esta semana.
 
 **Click en una sesión** → se abre en el centro con `claude --resume`. Si ya está abierta en otra terminal, Agent Map te avisa antes, porque dos ventanas escribiendo en la misma conversación pueden pisarse.
+
+**Click derecho en una sesión** → menú con:
+- **✏️ Cambiar nombre…:** un nombre propio para reconocerla. Solo cambia en Agent Map; la conversación de Claude no se toca. Vacío = nombre original.
+- **🎨 Color:** 8 colores (o ninguno). La sesión se marca con una franja y el nombre de ese color; sirve para agrupar por cliente, urgencia, etc.
+- **📌 Fijar arriba:** la sesión aparece en la sección **Fijadas**, al principio del árbol.
+- **📋 Copiar ID de la sesión:** para usar `claude --resume <id>` en otra terminal.
+- **↺ Restablecer:** quita nombre, color y fijado.
+
+El menú también se usa con el teclado: ↑ ↓ para moverse, Enter para elegir, Esc para cerrar.
 
 ---
 
@@ -84,8 +100,65 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 
 - Son terminales reales con Claude Code.
 - Siguen vivas al cambiar de sesión: las encuentras abajo, en la **barra de tareas**.
+- **Copiar y pegar** como en Windows Terminal:
+  - **Ctrl+V** (o Ctrl+Shift+V) pega el texto del portapapeles. Si el portapapeles no tiene texto (por ejemplo, una captura), se manda Ctrl+V a Claude para que pegue la imagen.
+  - **Ctrl+C** con texto seleccionado lo copia; sin selección, interrumpe a Claude como siempre.
+  - **Click derecho:** copia la selección o, si no hay selección, pega.
 - **✕ Cerrar terminal** (arriba o en la barra de tareas) pide confirmación con un popup.
 - Al cerrar una terminal se detiene Claude **y todo lo que lanzó** (servidores MCP, comandos). La conversación queda guardada.
+
+### 👥 Equipo de agentes
+
+Un **jefe** (orquestador) y **2 agentes** con nombre, cargo e instrucciones propias. Tú le hablas al jefe; él divide el trabajo y se lo encarga a los agentes, que pueden trabajar **al mismo tiempo** si sus tareas no se cruzan.
+
+**Crear un equipo**
+1. En Inicio, elige la carpeta (o crea una nueva con 📁 Elegir carpeta… → ＋ Crear aquí).
+2. Pulsa **👥 Iniciar con equipo…**.
+3. Elige una plantilla y cambia lo que quieras: nombre del jefe, nombre y cargo de cada agente, instrucciones.
+4. **Crear equipo e iniciar** abre la terminal del jefe, que ya sabe con quién trabaja.
+
+Plantillas (todas pensadas para que los 2 agentes puedan avanzar a la vez sin pisarse):
+
+| Plantilla | Agente 1 | Agente 2 |
+|---|---|---|
+| 🎮 Videojuego | Programador | Artista (sprites) |
+| 🌐 Página o app web | Frontend | Backend |
+| 🔍 Ingeniería inversa (entender un programa propio o con permiso) | Analista: lee y desarma el código módulo por módulo | Documentador: documenta y escribe pruebas que confirman lo analizado |
+| 🔄 Migración o modernización | Migrador: actualiza un módulo a la vez | Verificador: fija el comportamiento con pruebas antes y después |
+| 📚 Investigación y redacción | Investigador: busca y verifica fuentes | Redactor: escribe con esas notas |
+| 📊 Análisis de datos | Ingeniero de datos: limpia y prepara | Analista: gráficos y conclusiones |
+| 🛡 Revisión de seguridad del propio código | Auditor: busca fallas | Reparador: las corrige con pruebas |
+| ✏️ En blanco | — | — |
+
+> **Elige la carpeta de un solo proyecto.** Claude lee el `CLAUDE.md` de las carpetas de arriba, así que un equipo creado en una carpeta que contiene otros proyectos (por ejemplo `D:\Proyectos`) aparece en todos ellos. Agent Map te avisa y te pide confirmar si pasa.
+
+**Qué se crea en la carpeta del proyecto**
+
+| Archivo | Para qué |
+|---|---|
+| `CLAUDE.md` | Reglas del proyecto. Agent Map agrega (o reemplaza) solo su sección del equipo; lo demás que tengas ahí se conserva. |
+| `.claude/agents/<nombre>.md` | Un archivo por agente, con su cargo e instrucciones. Son subagentes normales de Claude Code. |
+| `TAREAS.md` | Pizarra compartida: Pendiente / En curso / Listo. El jefe la mantiene al día. |
+| `.claude/agent-map-team.json` | Le dice a Agent Map quién es quién (para la oficina y las fichas). |
+
+Si ya tienes un agente propio con el mismo nombre, Agent Map no lo pisa: te pide otro nombre.
+
+**Mientras trabajan**
+- **Panel izquierdo → 👥 Equipo:** las 3 fichas con su estado ("💻 Edita player.gd", "😴 Terminó hace 2 min"). Click en una ficha muestra **lo que está haciendo**, paso a paso. Es **solo lectura**: a los agentes no se les interrumpe; si quieres cambiar algo, díselo al jefe.
+- **Centro:** una sola terminal, la del jefe. Ahí escribes.
+- **Panel derecho → 🏢 Oficina:** la oficina en pixel art.
+  - Sin trabajo, los 3 duermen (zzz): el jefe en su sillón y los agentes en su escritorio.
+  - Cuando el jefe trabaja, va a su escritorio; cuando le encarga algo a un agente, ese agente despierta y se pone a teclear (su monitor se enciende).
+  - A veces se levantan a la **impresora** (más seguido cuando acaban de escribir un archivo) o a la **máquina de café**. Eso es decorativo.
+  - Mientras trabajan teclean, hacen pausas, miran a un lado o se estiran, y tienen un globito "…" sobre la cabeza. Durmiendo, respiran.
+  - **Pasa el mouse sobre alguien** y aparece su pensamiento con lo que hace en pocas palabras y cuánto lleva: "💭 Programador Codeando player.gd ⏱ 2:15", "💭 Artista Dibujando un sprite", "💭 Jefe Supervisando a Programador y Artista". El mismo resumen y el tiempo aparecen en las fichas de la izquierda y bajo la oficina.
+  - **⛶ Pantalla completa:** la oficina ocupa toda la pantalla y muestra los globos de todos. Esc (o "✕ Salir") vuelve al panel.
+  - **⧉ Separar:** abre la oficina en su propia ventana, que puedes llevar a otro monitor y poner en pantalla completa (F11 o su botón ⛶). **📌 Anclar** (en esa ventana o en el panel) la devuelve al panel; cerrar esa ventana hace lo mismo.
+  - También puedes arrastrar el divisor del panel derecho para verla más grande.
+  - Al caminar esquivan los muebles, y pasan casi todo el tiempo sentados: se levantan cada 15 a 30 segundos, y no siempre.
+  - **Sin tokens:** si tu plan llega al 100 %, se apaga la luz de la oficina (de noche, con luna en la ventana), los 3 duermen y un cartel muestra la cuenta regresiva hasta que se renueven los tokens.
+
+> **Ojo con el plan:** cada agente trabajando gasta del mismo límite de uso. Con 2 agentes a la vez el límite de 5 horas se consume más rápido. Míralo abajo, en la barra de tareas.
 
 ---
 
@@ -93,9 +166,12 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 
 Sin sesión seleccionada muestra un resumen general. Con una sesión seleccionada:
 
+Cada sección se **pliega o despliega** con un click en su título (botón ▲/▼). Agent Map recuerda cuáles dejaste plegadas, también en la ventana 📊 Uso.
+
 - **Datos:** proyecto, rama, estado, inicio, última actividad, duración.
 - **💬 Qué pasó:** primer y último prompt resumidos en 4 líneas. **Click** abre el texto completo en una ventana. Se quitan los recordatorios internos que agrega Claude Code.
-- **🗨 Conversación:** tus prompts (azul, a la derecha) y las respuestas de Claude (blanco, a la izquierda), en orden, resumidos en 3 líneas. Al abrir una sesión se ve lo más reciente abajo. **Click** en un mensaje abre el texto completo en un popup. Solo muestra texto: no las llamadas a herramientas, el razonamiento interno ni lo que hicieron los subagentes.
+- **🗨 Conversación (estilo MSN):** globos redondeados con punta: tú a la derecha (azul, "Tú dice:") y Claude a la izquierda (blanco, "Claude dice:"), en orden y resumidos en 3 líneas. Al abrir una sesión se ve lo más reciente abajo. **Click** en un mensaje abre el texto completo en un popup. Solo muestra texto: no las llamadas a herramientas, el razonamiento interno ni lo que hicieron los subagentes.
+- **🔴 Mensajes nuevos, como en Messenger:** cuando Claude responde algo que todavía no abriste aparece un globito rojo con el número: en la sesión y en la carpeta del proyecto (izquierda) y junto a "Conversación (N) +2" (derecha). Cada respuesta nueva llega en celeste, **parpadea 3 veces** y queda marcada con "NUEVO". Click en el globito rojo te lleva a la primera; **abrir una respuesta nueva la da por leída** (y las anteriores). Tus propios mensajes no cuentan. Se recuerda entre aperturas de la app: si Claude respondió con Agent Map cerrado, lo ves al abrir.
 - **🤖 Agentes usados:** cada agente es un link `↗`:
   - agentes de plugins (`plugin:agente`) → repositorio de GitHub del plugin;
   - agentes integrados (`Explore`, `Plan`, `general-purpose`, `web-fetch`…) → documentación oficial de subagentes.
@@ -103,6 +179,8 @@ Sin sesión seleccionada muestra un resumen general. Con una sesión seleccionad
 ---
 
 ## 6. 📊 Uso
+
+**En la barra de tareas** (abajo a la derecha) siempre ves la sesión de 5 horas: "⏳ Sesión: 63 % usado · quedan 37 % · se reinicia en 2 h 2 min". Se pone naranja desde 70 % y roja desde 90 %. Si llegaste al límite cambia a "🌙 Sin tokens · se renuevan en 1:22:04", con cuenta regresiva. Click en ella abre el detalle.
 
 El botón **📊 Uso** (junto a los filtros) abre una ventana con:
 
@@ -140,6 +218,7 @@ El nombre del plan se lee de `~/.claude.json` (datos de la cuenta). Agent Map **
 - **Terminales:** `node-pty` (ConPTY de Windows) ejecuta `claude --resume <id>` o `claude` en la carpeta elegida.
 - **Archivos propios:** todo lo que escribe Agent Map va a `C:\Users\<tú>\.agent-map\`:
   - `usage.json`: último uso del plan;
+  - `prefs.json`: tema, letra, pantalla completa y los nombres, colores y fijados de tus sesiones;
   - `statusline-tap.mjs`: copia del intermediario de la statusline;
   - `agent-map.log`: registro de arranque, cierre y errores.
 
@@ -170,6 +249,10 @@ npm run dist       # genera el icono y el instalador en dist/
 | `server.js` | API, terminales y archivos de la interfaz |
 | `lib/scan.js` | lectura de sesiones, conversación, plan y repos de plugins |
 | `lib/folders.js` | explorador y creación de carpetas |
+| `lib/prefs.js` | preferencias (tema, letra, pantalla completa) y nombres/colores de sesiones |
+| `lib/team.js` | equipo de agentes: crea sus archivos y lee su estado en vivo |
+| `public/office.js` | oficina pixel art del equipo (canvas, sin imágenes), globos de pensamiento |
+| `public/office.html`, `office-page.js` | la oficina en ventana aparte |
 | `statusline-tap.js` | intermediario de la statusline (uso del plan) |
 | `public/` | interfaz (HTML, CSS, JS sin frameworks) |
 | `scripts/make-icon.js` | genera `build/icon.ico` y `public/icon.png` |

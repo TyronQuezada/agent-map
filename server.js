@@ -9,6 +9,8 @@ import pty from 'node-pty';
 import { scanAll, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
+import { readPrefs, updatePrefs } from './lib/prefs.js';
+import { createTeam, teamStatus } from './lib/team.js';
 
 const HOST = '127.0.0.1';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -55,9 +57,29 @@ const server = http.createServer(async (req, res) => {
       try { const { parent, name } = await readJson(req); return json(res, { path: await makeDir(parent, name) }); }
       catch (err) { res.writeHead(400); return res.end(err.code === 'EEXIST' ? 'Ya existe una carpeta con ese nombre' : err.message); }
     }
+    if (url.pathname === '/api/team') {
+      if (req.method === 'POST') {
+        // Escribe archivos en la carpeta del proyecto: solo desde la propia página.
+        if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
+        try {
+          const body = await readJson(req);
+          if (!isDir(body?.dir)) throw new Error('Carpeta no encontrada');
+          return json(res, createTeam(path.resolve(body.dir), body));
+        } catch (err) { res.writeHead(400); return res.end(err.message); }
+      }
+      const dir = url.searchParams.get('dir');
+      return json(res, isDir(dir) ? teamStatus(dir) : null);
+    }
+    if (url.pathname === '/api/prefs') {
+      if (req.method !== 'POST') return json(res, readPrefs());
+      // Escribe en disco: solo desde la propia página.
+      if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
+      try { return json(res, updatePrefs(await readJson(req))); }
+      catch (err) { res.writeHead(400); return res.end(err.message); }
+    }
     if (url.pathname === '/api/tree') {
       lastTree = await scanAll();
-      const open = [...terms.values()].map(t => ({ key: t.key, label: t.label, sessionId: t.sessionId, alive: t.alive }));
+      const open = [...terms.values()].map(t => ({ key: t.key, label: t.label, sessionId: t.sessionId, cwd: t.cwd, alive: t.alive }));
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ projects: lastTree, open, repos: pluginRepos() }));
     }
@@ -129,7 +151,7 @@ function startTerm({ key, label, sessionId, cwd, args, cols, rows }) {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'claude';
   const shellArgs = process.platform === 'win32' ? ['/c', 'claude', ...args] : args;
   const p = pty.spawn(shell, shellArgs, { name: 'xterm-256color', cols, rows, cwd, env: cleanEnv() });
-  const t = { key, label, sessionId, pty: p, buffer: '', sockets: new Set(), alive: true };
+  const t = { key, label, sessionId, cwd, pty: p, buffer: '', sockets: new Set(), alive: true };
   p.onData(d => {
     t.buffer = (t.buffer + d).slice(-MAX_BUFFER);
     for (const ws of t.sockets) ws.send(d);

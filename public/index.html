@@ -7,6 +7,8 @@
   <link rel="icon" href="/icon.png">
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/style.css">
+  <!-- Pinta el último tema elegido antes del primer cuadro (evita un destello del tema XP) -->
+  <script>try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem('agentmap.theme')) || 'xp'; } catch { }</script>
 </head>
 <body>
   <div class="window">
@@ -31,6 +33,7 @@
         <button data-filter="week">Esta semana</button>
       </div>
       <button id="usageBtn" class="xpbtn" title="Agentes, herramientas y tokens de la sesión elegida (o de todas)">📊 Uso</button>
+      <button id="optionsBtn" class="xpbtn" title="Tema, letra de la terminal y pantalla completa" aria-label="Opciones">⚙ Opciones</button>
       <span class="spacer"></span>
       <button id="fullscreen" class="xpbtn" title="Pantalla completa">⛶ Pantalla completa</button>
       <button id="refresh" class="xpbtn" title="Actualizar ahora">⟳ Actualizar</button>
@@ -38,9 +41,14 @@
 
     <main class="panes">
       <aside class="pane left" aria-label="Sesiones">
-        <div class="pane-head">📁 Sesiones</div>
+        <div class="pane-head tabs" role="tablist">
+          <button role="tab" id="tabTree" class="tab on" aria-selected="true" aria-controls="tree">📁 Sesiones</button>
+          <button role="tab" id="tabTeam" class="tab" aria-selected="false" aria-controls="team" hidden>👥 Equipo</button>
+        </div>
         <div id="tree" class="tree" role="tree"></div>
+        <div id="team" class="team" role="tabpanel" hidden></div>
       </aside>
+      <div class="splitter left" data-side="left" role="separator" aria-orientation="vertical" aria-label="Ancho del panel de sesiones" title="Arrastra para cambiar el ancho · doble click: original"></div>
 
       <section class="center">
         <div class="center-head">
@@ -52,6 +60,7 @@
           <div id="home" class="home"></div>
         </div>
       </section>
+      <div class="splitter right" data-side="right" role="separator" aria-orientation="vertical" aria-label="Ancho del panel de detalle" title="Arrastra para cambiar el ancho · doble click: original"></div>
 
       <aside class="pane right" aria-label="Estadísticas">
         <div id="stats" class="taskpane"></div>
@@ -61,6 +70,7 @@
     <footer class="taskbar">
       <button id="startBtn" class="start" title="Volver al inicio">▶ Inicio</button>
       <div id="tasks" class="tasks"></div>
+      <button id="quota" class="quota" hidden title="Uso de tu plan de Claude (click para ver el detalle)"></button>
       <span id="clock" class="clock"></span>
     </footer>
   </div>
@@ -76,6 +86,7 @@
 
   <script src="/vendor/xterm.js"></script>
   <script src="/vendor/addon-fit.js"></script>
+  <script src="/office.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>
