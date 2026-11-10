@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Map</title>
+  <link rel="icon" href="/icon.png">
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="window">
+    <header class="titlebar">
+      <span class="logo" aria-hidden="true"></span>
+      <h1>Agent Map</h1>
+      <span class="subtitle">Sesiones de Claude Code</span>
+      <span class="spacer"></span>
+      <span class="winbtns" hidden>
+        <button id="winMin" class="winbtn" title="Minimizar" aria-label="Minimizar">_</button>
+        <button id="winMax" class="winbtn" title="Maximizar" aria-label="Maximizar">□</button>
+        <button id="winClose" class="winbtn close" title="Cerrar" aria-label="Cerrar">×</button>
+      </span>
+    </header>
+
+    <nav class="toolbar">
+      <input id="search" type="search" placeholder="Buscar sesión, proyecto o prompt…" aria-label="Buscar">
+      <div class="seg" role="group" aria-label="Filtro">
+        <button data-filter="all" class="on">Todas</button>
+        <button data-filter="live">Activas</button>
+        <button data-filter="today">Hoy</button>
+        <button data-filter="week">Esta semana</button>
+      </div>
+      <button id="usageBtn" class="xpbtn" title="Agentes, herramientas y tokens de la sesión elegida (o de todas)">📊 Uso</button>
+      <span class="spacer"></span>
+      <button id="fullscreen" class="xpbtn" title="Pantalla completa">⛶ Pantalla completa</button>
+      <button id="refresh" class="xpbtn" title="Actualizar ahora">⟳ Actualizar</button>
+    </nav>
+
+    <main class="panes">
+      <aside class="pane left" aria-label="Sesiones">
+        <div class="pane-head">📁 Sesiones</div>
+        <div id="tree" class="tree" role="tree"></div>
+      </aside>
+
+      <section class="center">
+        <div class="center-head">
+          <span id="termTitle">Inicio</span>
+          <span class="spacer"></span>
+          <button id="closeTerm" class="xpbtn small" hidden>✕ Cerrar terminal</button>
+        </div>
+        <div id="stage" class="stage">
+          <div id="home" class="home"></div>
+        </div>
+      </section>
+
+      <aside class="pane right" aria-label="Estadísticas">
+        <div id="stats" class="taskpane"></div>
+      </aside>
+    </main>
+
+    <footer class="taskbar">
+      <button id="startBtn" class="start" title="Volver al inicio">▶ Inicio</button>
+      <div id="tasks" class="tasks"></div>
+      <span id="clock" class="clock"></span>
+    </footer>
+  </div>
+
+  <dialog id="modal" class="modal" aria-labelledby="modalTitle">
+    <header class="titlebar">
+      <h1 id="modalTitle"></h1>
+      <span class="spacer"></span>
+      <button class="winbtn close" data-close-modal aria-label="Cerrar">×</button>
+    </header>
+    <div id="modalBody" class="modal-body"></div>
+  </dialog>
+
+  <script src="/vendor/xterm.js"></script>
+  <script src="/vendor/addon-fit.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
