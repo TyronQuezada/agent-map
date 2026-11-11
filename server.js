@@ -69,7 +69,7 @@ const server = http.createServer(async (req, res) => {
       // Límites del plan que guarda statusline-tap.js; null si todavía no hay datos.
       let usage = null;
       try { usage = JSON.parse(await fs.promises.readFile(USAGE_FILE, 'utf8')); } catch {}
-      return json(res, { plan: planInfo(), usage });
+      return json(res, { plan: await planInfo(), usage });
     }
     if (url.pathname === '/api/dirs') {
       try { return json(res, await listDirs(url.searchParams.get('path'))); }
@@ -91,8 +91,10 @@ const server = http.createServer(async (req, res) => {
           return json(res, createTeam(path.resolve(body.dir), body));
         } catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
       }
+      // Se consulta cada 1,5 s: sin statSync. Una ruta que no es carpeta o no existe da null igual que antes,
+      // porque teamStatus no encuentra el archivo del equipo.
       const dir = url.searchParams.get('dir');
-      return json(res, isDir(dir) ? teamStatus(dir) : null);
+      return json(res, typeof dir === 'string' && path.isAbsolute(dir) ? await teamStatus(dir) : null);
     }
     if (url.pathname === '/api/prefs') {
       if (req.method !== 'POST') return json(res, readPrefs());
