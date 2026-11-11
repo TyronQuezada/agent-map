@@ -1,4 +1,4 @@
-// Agent Map como app de escritorio: arranca el servidor dentro de la app (puerto interno al azar)
+// Agent Map como app de escritorio: arranca el servidor dentro de la app (puerto fijo 47317, o al azar si está ocupado)
 // y lo muestra en una ventana sin marco con la barra de título XP propia.
 import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerMonitor } from 'electron';
 import fs from 'node:fs';
@@ -40,9 +40,24 @@ function installTap() {
   } catch (err) { console.error('No se pudo instalar statusline-tap:', err); }
 }
 
+// Puerto fijo: la página siempre tiene el mismo origen (http://127.0.0.1:47317), así que su localStorage
+// (paneles, secciones plegadas, mensajes leídos) se conserva entre reinicios. Está fuera del rango efímero de
+// Windows (49152+). Si está ocupado o reservado, se usa uno al azar: nunca se habla con lo que lo ocupe, porque
+// la ventana se abre en el puerto donde de verdad quedó escuchando este proceso.
+const PREFERRED_PORT = 47317;
+async function listenOnPreferredPort() {
+  try { return await startServer(PREFERRED_PORT); }
+  catch (err) {
+    if (err.code !== 'EADDRINUSE' && err.code !== 'EACCES') throw err;
+    const port = await startServer(0);
+    log(`puerto ${PREFERRED_PORT} no disponible (${err.code}): se usa el ${port}; en este arranque no se conservan las preferencias de la ventana`);
+    return port;
+  }
+}
+
 async function createWindow() {
   installTap();
-  const port = await startServer(0);
+  const port = await listenOnPreferredPort();
   origin = `http://127.0.0.1:${port}`;
   const prefs = readPrefs();
   win = new BrowserWindow({

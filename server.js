@@ -255,15 +255,23 @@ export function killAllTerms(timeoutMs = 10000) {
 }
 export const openTermCount = () => [...terms.values()].filter(t => t.alive).length;
 
-/** Arranca el servidor en 127.0.0.1. port 0 = puerto libre al azar. Devuelve el puerto real. */
+/**
+ * Arranca el servidor en 127.0.0.1 (nunca en la red local). port 0 = puerto libre al azar. Devuelve el puerto real.
+ * Si el puerto está ocupado rechaza con el error (EADDRINUSE/EACCES) y deja el servidor listo para reintentar:
+ * el propio intento de escuchar es la comprobación, así que no hay carrera entre "ver si está libre" y usarlo.
+ */
 export function startServer(port) {
   return new Promise((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(port, HOST, () => {
+    const onError = err => { server.off('listening', onListening); reject(err); };
+    const onListening = () => {
+      server.off('error', onError);
       const real = server.address().port;
       for (const h of [HOST, 'localhost']) { ALLOWED_HOSTS.add(`${h}:${real}`); ALLOWED_ORIGINS.add(`http://${h}:${real}`); }
       resolve(real);
-    });
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(port, HOST);
   });
 }
 
