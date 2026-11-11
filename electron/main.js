@@ -1,12 +1,16 @@
 // Agent Map como app de escritorio: arranca el servidor dentro de la app (puerto interno al azar)
 // y lo muestra en una ventana sin marco con la barra de título XP propia.
-import { app, BrowserWindow, ipcMain, shell, dialog, clipboard } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerMonitor } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, killAllTerms, openTermCount, setLogger } from '../server.js';
+import { startServer, killAllTerms, openTermCount, setLogger, activeRequests } from '../server.js';
 import { USAGE_FILE } from '../statusline-tap.js';
 import { readPrefs } from '../lib/prefs.js';
+import { startLagMonitor } from '../lib/diag.js';
+
+// Diagnóstico interno: false lo apaga. Solo registra tramos del event loop ocupados más de lagThresholdMs.
+const DIAG = { lagMonitor: true, lagThresholdMs: 50 };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let win = null;
@@ -65,7 +69,9 @@ async function createWindow() {
   win.webContents.on('did-create-window', child => { // la oficina tampoco puede navegar fuera ni abrir otras ventanas
     child.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) e.preventDefault(); });
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    watchRenderer(child.webContents, 'oficina');
   });
+  watchRenderer(win.webContents, 'principal');
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) e.preventDefault(); });
 
   // Cerrar (×, Alt+F4, barra de tareas): pregunta primero con el popup XP de la página.
@@ -96,6 +102,16 @@ function log(msg) {
 setLogger(log);
 process.on('uncaughtException', err => log('uncaughtException ' + (err?.stack || err)));
 process.on('unhandledRejection', err => log('unhandledRejection ' + (err?.stack || err)));
+if (DIAG.lagMonitor) {
+  const lag = startLagMonitor({ log, thresholdMs: DIAG.lagThresholdMs, context: activeRequests });
+  // Al suspender el equipo el reloj salta: no es un bloqueo. (powerMonitor solo existe tras app ready.)
+  app.whenReady().then(() => { powerMonitor.on('suspend', lag.pause); powerMonitor.on('resume', lag.resume); });
+}
+
+// Caídas de una página (proceso renderer). Solo se registran: no hay recarga automática.
+function watchRenderer(wc, name) {
+  wc.on('render-process-gone', (_e, d) => log(`renderer caído: ventana ${name}, motivo ${d.reason}, código de salida ${d.exitCode}`));
+}
 
 // Salida ordenada: esconder la ventana, esperar a que las terminales terminen y recién ahí salir.
 async function quit() {

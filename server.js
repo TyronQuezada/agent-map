@@ -11,6 +11,7 @@ import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
 import { readPrefs, updatePrefs } from './lib/prefs.js';
 import { createTeam, teamStatus } from './lib/team.js';
+import { createThrottle, sanitize, startLagMonitor } from './lib/diag.js';
 
 const HOST = '127.0.0.1';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -36,8 +37,31 @@ async function readJson(req) {
   return JSON.parse(body || '{}');
 }
 
+// ---- Diagnóstico: errores HTTP y peticiones en curso (método y ruta; nunca query, cuerpo ni cabeceras) ----
+const inflight = new Map(); // "GET /api/tree" -> cantidad en curso
+/** Peticiones atendiéndose ahora mismo, para dar contexto a un aviso de bloqueo del event loop. */
+export const activeRequests = () => [...inflight].map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ');
+const throttled = createThrottle(msg => logger(msg));
+function track(req, res, url) {
+  const route = `${req.method} ${sanitize(url.pathname, 80)}`;
+  inflight.set(route, (inflight.get(route) || 0) + 1);
+  res.on('close', () => {
+    const n = inflight.get(route) - 1;
+    n > 0 ? inflight.set(route, n) : inflight.delete(route);
+    const code = res.statusCode;
+    const api = url.pathname.startsWith('/api/');
+    if (code < 400 || (code === 404 && !api)) return; // los estáticos que no existen no son errores de la app
+    const err = res.err;
+    const kind = err ? `${err.name}${err.code ? ' ' + err.code : ''}` : 'sin excepción';
+    // 4xx: sin mensaje (puede repetir lo que escribió el usuario: nombres de carpetas o de agentes).
+    const msg = code >= 500 && err ? `: ${sanitize(err.message)}` : '';
+    throttled(`${route} ${code} ${kind}`, `HTTP ${code} ${route} (${kind}${msg})`);
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${HOST}`);
+  track(req, res, url);
   // Contra DNS rebinding: una web ajena que apunte su dominio a 127.0.0.1 llega con otro Host.
   if (!ALLOWED_HOSTS.has(req.headers.host)) { res.writeHead(403); return res.end(); }
   try {
@@ -49,13 +73,13 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/dirs') {
       try { return json(res, await listDirs(url.searchParams.get('path'))); }
-      catch (err) { res.writeHead(400); return res.end(err.code === 'ENOENT' ? 'La carpeta no existe' : err.code === 'EPERM' || err.code === 'EACCES' ? 'Sin permiso para abrir esta carpeta' : err.message); }
+      catch (err) { res.err = err; res.writeHead(400); return res.end(err.code === 'ENOENT' ? 'La carpeta no existe' : err.code === 'EPERM' || err.code === 'EACCES' ? 'Sin permiso para abrir esta carpeta' : err.message); }
     }
     if (url.pathname === '/api/mkdir' && req.method === 'POST') {
       // Escribe en disco: solo desde la propia página (otra web podría mandar un POST simple).
       if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
       try { const { parent, name } = await readJson(req); return json(res, { path: await makeDir(parent, name) }); }
-      catch (err) { res.writeHead(400); return res.end(err.code === 'EEXIST' ? 'Ya existe una carpeta con ese nombre' : err.message); }
+      catch (err) { res.err = err; res.writeHead(400); return res.end(err.code === 'EEXIST' ? 'Ya existe una carpeta con ese nombre' : err.message); }
     }
     if (url.pathname === '/api/team') {
       if (req.method === 'POST') {
@@ -65,7 +89,7 @@ const server = http.createServer(async (req, res) => {
           const body = await readJson(req);
           if (!isDir(body?.dir)) throw new Error('Carpeta no encontrada');
           return json(res, createTeam(path.resolve(body.dir), body));
-        } catch (err) { res.writeHead(400); return res.end(err.message); }
+        } catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
       }
       const dir = url.searchParams.get('dir');
       return json(res, isDir(dir) ? teamStatus(dir) : null);
@@ -75,7 +99,7 @@ const server = http.createServer(async (req, res) => {
       // Escribe en disco: solo desde la propia página.
       if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
       try { return json(res, updatePrefs(await readJson(req))); }
-      catch (err) { res.writeHead(400); return res.end(err.message); }
+      catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
     }
     if (url.pathname === '/api/tree') {
       lastTree = await scanAll();
@@ -101,7 +125,7 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     res.writeHead(err.code === 'ENOENT' ? 404 : 500);
     res.end(err.code === 'ENOENT' ? 'No encontrado' : 'Error');
-    if (err.code !== 'ENOENT') console.error(err);
+    res.err = err; // se registra al cerrar la respuesta (track), con el mensaje saneado
   }
 });
 
@@ -169,7 +193,10 @@ function startTerm({ key, label, sessionId, cwd, args, cols, rows }) {
 const wss = new WebSocketServer({ noServer: true });
 server.on('upgrade', (req, socket, head) => {
   // Bloquea páginas web ajenas que intenten abrir una terminal en tu máquina.
-  if (!ALLOWED_ORIGINS.has(req.headers.origin)) { socket.destroy(); return; }
+  if (!ALLOWED_ORIGINS.has(req.headers.origin)) {
+    throttled('ws-origen', `WebSocket rechazado: origen no permitido (${sanitize(req.headers.origin || 'sin origen', 80)})`);
+    socket.destroy(); return;
+  }
   wss.handleUpgrade(req, socket, head, ws => onTerminal(ws, new URL(req.url, `http://${HOST}`)));
 });
 
@@ -242,6 +269,7 @@ export function startServer(port) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = await startServer(Number(process.env.PORT) || 4317);
   console.log(`Agent Map listo en http://localhost:${port}`);
+  if (process.env.AGENT_MAP_LAG !== '0') startLagMonitor({ log: msg => logger(msg), context: activeRequests });
   const shutdown = () => killAllTerms().then(() => process.exit(0));
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
