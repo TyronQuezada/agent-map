@@ -290,3 +290,112 @@ test('sesión grande: lectura por partes sin bloqueos largos y agregar 1 línea 
   assert.ok(performance.now() - t0 < 2000); // holgado: lo que importa es lo de arriba
   await sameAsFull(file);
 });
+
+// ---------- E0.3: huellas desde los bytes procesados (N1) y estado coherente tras errores (N3) ----------
+
+/** Intercepta las lecturas de los archivos abiertos con fs.promises.open durante la prueba. */
+function interceptReads(t, onRead) {
+  const open = fs.promises.open;
+  fs.promises.open = async (...args) => {
+    const fh = await open(...args);
+    const read = fh.read.bind(fh);
+    fh.read = (buf, off, len, pos) => onRead({ len, pos }, () => read(buf, off, len, pos));
+    return fh;
+  };
+  t.after(() => { fs.promises.open = open; });
+}
+const fileError = () => Object.assign(new Error('EIO: falla simulada de lectura'), { code: 'EIO' });
+
+test('N1: las huellas salen de los bytes ya leídos, sin volver a leer el archivo', async t => {
+  const { file } = tmp(t);
+  fs.writeFileSync(file, lines([user('a'), user('b'), user('c')]));
+  const reads = [];
+  interceptReads(t, (r, go) => { reads.push(r); return go(); });
+  const tail = new JsonlTail(file);
+  await tail.read(() => {});
+  assert.equal(reads.length, 1, 'lectura inicial: solo los datos'); // antes: + 2 lecturas para las huellas
+  reads.length = 0;
+  const add = line(user('d'));
+  fs.appendFileSync(file, add);
+  assert.equal((await tail.read(() => {})).records, 1);
+  // 2 comprobaciones (inicio y final ya leídos) + 1 lectura de los bytes nuevos; antes: + 2 para recalcular huellas
+  assert.equal(reads.length, 3);
+  assert.equal(reads[2].len, Buffer.byteLength(add));
+  // Las huellas son exactamente los bytes del archivo que ya se procesaron.
+  const bytes = fs.readFileSync(file);
+  assert.ok(tail.head.equals(bytes.subarray(0, 64)));
+  assert.ok(tail.mark.equals(bytes.subarray(tail.offset - 64, tail.offset)));
+  await sameAsFull(file);
+});
+
+test('N1: si el archivo se reescribe mientras se lee, la siguiente lectura lo detecta y empieza de cero', async t => {
+  const { file } = tmp(t);
+  const viejo = lines([user('viejo 1'), user('viejo 2')]);
+  const nuevo = lines([user('NUEVO 1'), user('NUEVO 2')]); // mismo tamaño: solo cambia el contenido
+  assert.equal(viejo.length, nuevo.length);
+  fs.writeFileSync(file, viejo);
+  const tail = new JsonlTail(file);
+  let once = true;
+  await tail.read(() => { if (once) { once = false; fs.writeFileSync(file, nuevo); } }); // entregó lo viejo
+  let resets = 0;
+  const got = [];
+  const r = await tail.read(x => got.push(x.message.content), () => resets++);
+  assert.ok(r.reset, 'las huellas eran de lo procesado (viejo), no del archivo nuevo');
+  assert.equal(resets, 1);
+  assert.deepEqual(got, ['NUEVO 1', 'NUEVO 2']);
+  await sameAsFull(file);
+});
+
+test('N3: un fallo después de procesar los datos no deja al lector trabado', async t => {
+  const { file } = tmp(t);
+  fs.writeFileSync(file, lines([user('1'), user('2')]));
+  // Falla toda lectura posterior a la de los datos (antes eran las que recalculaban las huellas).
+  let dataRead = false, failing = true;
+  interceptReads(t, (r, go) => { if (failing && dataRead) throw fileError(); dataRead = true; return go(); });
+  const tail = new JsonlTail(file);
+  const got = [];
+  await tail.read(x => got.push(x.message.content)).catch(() => {});
+  failing = false;
+  fs.appendFileSync(file, line(user('3')));
+  // Antes: TypeError por la huella vacía con offset > 0, en esta y en todas las lecturas siguientes.
+  await tail.read(x => got.push(x.message.content));
+  assert.deepEqual(got, ['1', '2', '3']); // sin pérdidas ni repetidos
+});
+
+test('N3: si falla la comprobación de huellas, el error se informa, nada cambia y luego se recupera', async t => {
+  const { file } = tmp(t);
+  fs.writeFileSync(file, lines([user('1'), user('2')]));
+  const tail = new JsonlTail(file);
+  const got = [];
+  await tail.read(x => got.push(x.message.content));
+  const before = { offset: tail.offset, head: Buffer.from(tail.head), mark: Buffer.from(tail.mark) };
+  fs.appendFileSync(file, line(user('3')));
+  let fail = true;
+  interceptReads(t, (r, go) => { if (fail) throw fileError(); return go(); }); // falla la primera comprobación
+  await assert.rejects(tail.read(x => got.push(x.message.content)), { code: 'EIO' }); // no se oculta
+  assert.equal(tail.offset, before.offset);
+  assert.ok(tail.head.equals(before.head) && tail.mark.equals(before.mark));
+  fail = false;
+  const r = await tail.read(x => got.push(x.message.content));
+  assert.equal(r.reset, false);
+  assert.deepEqual(got, ['1', '2', '3']); // sin pérdidas ni repetidos
+});
+
+test('N3: un fallo a mitad de un archivo grande deja huellas coherentes y la siguiente lectura sigue donde quedó', async t => {
+  const { file } = tmp(t);
+  const pad = 'x'.repeat(5000);
+  const total = 600; // ~3 MB: varios bloques de 1 MB
+  fs.writeFileSync(file, Array.from({ length: total }, (_, i) => line(user(i + ' ' + pad))).join(''));
+  let n = 0;
+  interceptReads(t, (r, go) => { if (++n === 2) throw fileError(); return go(); }); // falla el 2.º bloque
+  const tail = new JsonlTail(file);
+  const got = [];
+  await assert.rejects(tail.read(x => got.push(x.message.content.split(' ')[0])), { code: 'EIO' });
+  assert.ok(tail.offset > 0 && got.length > 0 && got.length < total);
+  const bytes = fs.readFileSync(file);
+  assert.ok(tail.head.equals(bytes.subarray(0, 64)));
+  assert.ok(tail.mark.equals(bytes.subarray(tail.offset - 64, tail.offset))); // termina donde quedó el offset
+  const r = await tail.read(x => got.push(x.message.content.split(' ')[0]));
+  assert.equal(r.reset, false);
+  assert.deepEqual(got, Array.from({ length: total }, (_, i) => String(i))); // todo, una vez, en orden
+});
