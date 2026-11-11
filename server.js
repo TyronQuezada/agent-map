@@ -9,7 +9,7 @@ import pty from 'node-pty';
 import { scanAll, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
-import { readPrefs, updatePrefs } from './lib/prefs.js';
+import { readPrefs, updatePrefs, isSoundName } from './lib/prefs.js';
 import { createTeam, teamStatus } from './lib/team.js';
 import { createThrottle, sanitize, startLagMonitor } from './lib/diag.js';
 
@@ -24,6 +24,22 @@ const VENDOR = {
   '/vendor/addon-fit.js': nm('@xterm/addon-fit/lib/addon-fit.js'),
 };
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
+// Sonidos de aviso: se leen del disco local, nunca de internet. Orden: los del usuario (~/.agent-map/sounds),
+// Sounds/ junto al código (desarrollo) y resources/sounds de la app instalada (solo en la compilación local,
+// `npm run dist:local`: esos audios no se redistribuyen en las releases públicas).
+export const SOUNDS_DIR = path.join(path.dirname(USAGE_FILE), 'sounds');
+const SOUND_DIRS = [SOUNDS_DIR, path.join(here, 'Sounds'), ...(process.resourcesPath ? [path.join(process.resourcesPath, 'sounds')] : [])];
+const AUDIO_TYPES = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' };
+/** nombre -> carpeta. Solo archivos reales que aparecen al listar las carpetas autorizadas (sin enlaces ni rutas). */
+async function soundFiles() {
+  const found = new Map();
+  for (const dir of SOUND_DIRS) {
+    let entries = [];
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { continue; } // carpeta inexistente
+    for (const e of entries) if (e.isFile() && isSoundName(e.name) && !found.has(e.name)) found.set(e.name, dir);
+  }
+  return found;
+}
 // Se llenan al escuchar, cuando ya se conoce el puerto real (la app de escritorio usa uno al azar).
 const ALLOWED_ORIGINS = new Set();
 const ALLOWED_HOSTS = new Set();
@@ -117,6 +133,20 @@ const server = http.createServer(async (req, res) => {
       const msgs = await readMessages(path.join(CLAUDE_DIR, 'projects', found.s.dirKey, id + '.jsonl'));
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify(msgs));
+    }
+    if (url.pathname === '/api/sounds') { // qué sonidos hay de verdad, para las opciones
+      const files = [...await soundFiles()].map(([name, dir]) => ({ name, mine: dir === SOUNDS_DIR }));
+      return json(res, { dir: SOUNDS_DIR, files: files.sort((a, b) => a.name.localeCompare(b.name)) });
+    }
+    if (url.pathname.startsWith('/sounds/')) {
+      let name = '';
+      try { name = decodeURIComponent(url.pathname.slice('/sounds/'.length)); } catch { /* %mal formado */ }
+      // Solo un nombre que aparezca al listar una carpeta autorizada: nada de rutas, enlaces ni dispositivos.
+      const dir = isSoundName(name) && (await soundFiles()).get(name);
+      if (!dir) { res.writeHead(404); return res.end('No encontrado'); }
+      const data = await fs.promises.readFile(path.join(dir, name));
+      res.writeHead(200, { 'content-type': AUDIO_TYPES[path.extname(name).toLowerCase()] });
+      return res.end(data);
     }
     const file = VENDOR[url.pathname] ||
       path.join(here, 'public', url.pathname === '/' ? 'index.html' : path.normalize(url.pathname));

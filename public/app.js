@@ -353,16 +353,54 @@ function showOptions() {
     ${window.desktop ? `<h4 class="opt-head">Ventana</h4>
     <label class="opt-row"><input type="checkbox" id="optFull"${p.startFullscreen ? ' checked' : ''}> Abrir en pantalla completa</label>
     <p class="muted">F11 activa o desactiva la pantalla completa en cualquier momento.</p>` : ''}
+    <h4 class="opt-head">Sonidos</h4>
+    <label class="opt-row">Volumen
+      <input type="range" id="optVol" min="0" max="100" step="5" value="${Math.round((p.sounds?.volume ?? 0.7) * 100)}">
+      <span id="optVolTxt">${Math.round((p.sounds?.volume ?? 0.7) * 100)} %</span>
+    </label>
+    <div id="optSoundRows">${soundRows(p.sounds, null)}</div>
+    <div class="opt-row sound-dir">${window.desktop ? '<button type="button" class="xpbtn small" id="optSndFolder">📂 Abrir carpeta de sonidos</button>' : ''}
+      <small class="muted" id="optSndDir">Los sonidos no vienen con Agent Map: agrega tus propios archivos mp3, wav u ogg.</small></div>
+    <p class="muted" id="optSndMsg" role="status"></p>
     <h4 class="opt-head">Acerca de</h4>
     <button class="xpbtn primary" id="optAbout">📖 Cómo funciona Agent Map (guía paso a paso)</button>
     <p class="picker-msg" id="optMsg" role="alert"></p>`);
   const body = $('#modalBody');
+  let soundList = null; // { dir, files: [{ name, mine }] } de /api/sounds
+  const drawSounds = () => {
+    if (!$('#optSoundRows')) return; // el modal ya se cerró
+    $('#optSoundRows').innerHTML = soundRows(state.prefs.sounds, soundList);
+    if (soundList) $('#optSndDir').textContent = 'Tus sonidos (mp3, wav u ogg) van en: ' + soundList.dir;
+  };
+  const refreshSounds = async () => {
+    try { const r = await fetch('/api/sounds'); if (r.ok) soundList = await r.json(); } catch { /* sin servidor: queda la lista sugerida */ }
+    drawSounds();
+  };
+  refreshSounds();
   const save = async patch => {
     try { await savePrefs(patch); $('#optMsg').textContent = ''; }
     catch (err) { $('#optMsg').textContent = err.message; }
   };
   body.onclick = async e => {
     if (e.target.id === 'optAbout') return showAbout();
+    if (e.target.id === 'optSndFolder') {
+      const ok = await window.desktop.openSoundsFolder();
+      $('#optSndMsg').textContent = ok ? 'Copia ahí tus archivos de audio; la lista se actualiza al volver a esta ventana.' : 'No se pudo abrir la carpeta.';
+      window.addEventListener('focus', refreshSounds, { once: true });
+      return;
+    }
+    const test = e.target.closest('[data-snd-test]');
+    if (test) {
+      const k = test.dataset.sndTest, file = state.prefs.sounds?.[k]?.file || '';
+      const r = await player.play(k, state.prefs.sounds, true); // probar suena aunque esté desactivado
+      $('#optSndMsg').textContent = {
+        played: `▶ ${SOUND_NAMES[k]}: ${file}`,
+        muted: 'El volumen está en 0 %.',
+        blocked: 'El navegador bloqueó el sonido: haz click en la página y vuelve a probar.',
+        error: `No se encontró o no se pudo reproducir ${file}. Agrega ese archivo a tu carpeta de sonidos o elige otro.`,
+      }[r] || '';
+      return;
+    }
     const b = e.target.closest('[data-theme-pick]');
     if (!b) return;
     await save({ theme: b.dataset.themePick });
@@ -375,7 +413,28 @@ function showOptions() {
   body.onchange = e => {
     if (e.target.id === 'optFont') save({ fontSize: Number(e.target.value) });
     if (e.target.id === 'optFull') save({ startFullscreen: e.target.checked });
+    if (e.target.id === 'optVol') save({ sounds: { volume: Number(e.target.value) / 100 } });
+    if (e.target.dataset.sndOn) save({ sounds: { [e.target.dataset.sndOn]: { on: e.target.checked } } });
+    if (e.target.dataset.sndFile) save({ sounds: { [e.target.dataset.sndFile]: { file: e.target.value } } }).then(drawSounds);
   };
+  body.oninput = e => { if (e.target.id === 'optVol') $('#optVolTxt').textContent = e.target.value + ' %'; };
+}
+const SOUND_NAMES = { message: 'Respuesta nueva de Claude', finished: 'Claude terminó', toast: 'Otros avisos (espera, sesión nueva o cerrada)' };
+// Filas de sonido de ⚙ Opciones. list: lo que hay de verdad en disco (null = todavía no se sabe). Nombres escapados: son del usuario.
+function soundRows(sounds, list) {
+  const names = list ? list.files.map(f => f.name) : AgentMapSounds.FILES;
+  return AgentMapSounds.KINDS.map(k => {
+    const cur = sounds?.[k]?.file || '';
+    const missing = !!list && !!cur && !names.includes(cur);
+    const options = [...new Set([...names, cur].filter(Boolean))];
+    return `<div class="opt-row sound-row">
+      <label><input type="checkbox" data-snd-on="${k}"${sounds?.[k]?.on ? ' checked' : ''}> ${SOUND_NAMES[k]}</label>
+      <select data-snd-file="${k}" aria-label="Sonido para: ${SOUND_NAMES[k]}">${options.map(f =>
+        `<option value="${esc(f)}"${f === cur ? ' selected' : ''}>${esc(f)}${missing && f === cur ? ' (falta)' : ''}</option>`).join('')}</select>
+      <button type="button" class="xpbtn small" data-snd-test="${k}">▶ Probar</button>
+      ${missing ? '<small class="snd-missing">⚠ Falta este archivo: no sonará hasta que lo agregues o elijas otro.</small>' : ''}
+    </div>`;
+  }).join('');
 }
 
 // ---------- selección y apertura ----------
@@ -402,7 +461,7 @@ function openTerm(params, label, sessionId, cwd = "") {
   term.open(el);
   let key = params.key || 'tmp-' + Date.now();
   // cwd: para saber si la terminal es de un proyecto con equipo de agentes
-  const t = { term, fit, el, label, sessionId, ws: null, cwd: cwd || params.newIn || (sessionId && findSession(sessionId)?.cwd) || '' };
+  const t = { term, fit, el, label, sessionId, ws: null, cwd: cwd || params.newIn || (sessionId && findSession(sessionId)?.cwd) || '', born: Date.now() };
   state.terms.set(key, t);
   showTerm(key);
   fit.fit();
@@ -464,6 +523,7 @@ async function closeTerm(key) {
     `¿Cerrar la terminal <b>${esc(t.label)}</b>?<br>Claude se detendrá, pero la conversación queda guardada y puedes retomarla después.`,
     '✕ Cerrar terminal');
   if (!ok || !state.terms.has(key)) return;
+  for (const id of [key, t.sessionId]) if (id) closedHere.set(id, Date.now()); // la cerraste tú: sin aviso de "sesión cerrada"
   if (t.ws?.readyState === 1) t.ws.send(JSON.stringify({ t: 'kill' }));
   t.ws?.close(); t.term.dispose(); t.el.remove();
   state.terms.delete(key);
@@ -979,7 +1039,8 @@ function convoHtml(list, s) {
       if (!flashed.has(s.id + ':' + n)) { flashed.add(s.id + ':' + n); cls += ' flash'; } // parpadea 3 veces y queda marcado
     }
     return `<div class="msg-row ${m.role}"><button class="msg ${m.role}${cls}" data-msg="${i}" data-ord="${n}" title="Ver el mensaje completo">
-      <b>${who(m)} dice:</b> <small>${esc(ago(m.ts))}</small>${n >= read ? ' <em class="new-tag">NUEVO</em>' : ''}<span>${esc(m.text.slice(0, 600))}</span></button></div>`;
+      <b>${who(m)} dice:</b> <small>${esc(ago(m.ts))}</small>${n >= read ? ' <em class="new-tag">NUEVO</em>' : ''}<span>${esc(m.text.slice(0, 600))}</span></button>
+      <button type="button" class="copy-icon" data-copy-msg="${i}" title="Copiar este mensaje completo" aria-label="Copiar mensaje de ${who(m)}">📋</button></div>`;
   }).join('');
 }
 const unreadInList = (list, s) => Math.max(0, list.filter(m => m.role === 'assistant').length - (seen[s.id] ?? 0));
@@ -1042,7 +1103,7 @@ $('#stats').addEventListener('click', async e => {
   const m = e.target.closest('[data-msg]');
   if (m) {
     const msg = state.convo?.list?.[+m.dataset.msg];
-    if (msg) openModal(`${who(msg)} · ${dateTime(msg.ts)}`, `<div class="prompt-full">${esc(msg.text)}</div>`);
+    if (msg) openModal(`${who(msg)} · ${dateTime(msg.ts)}`, fullTextHtml(msg.text));
     if (+m.dataset.ord >= 0) markRead(state.convo.id, +m.dataset.ord + 1); // abrir una respuesta nueva la da por leída (y las anteriores)
     return;
   }
@@ -1050,11 +1111,12 @@ $('#stats').addEventListener('click', async e => {
   if (!b) return;
   const s = findSession(state.selected);
   const which = b.dataset.prompt;
+  modalCopyText = null;
   openModal((which === 'first' ? 'Primer prompt' : 'Último prompt') + ' · ' + title(s), '<p class="prompt-full">Cargando…</p>');
   try {
     const mine = (await messages(s)).filter(x => x.role === 'user');
     const full = which === 'first' ? mine[0] : mine[mine.length - 1];
-    $('#modalBody').innerHTML = `<div class="prompt-full">${esc(full?.text || '—')}</div>`;
+    $('#modalBody').innerHTML = fullTextHtml(full?.text);
   } catch (err) {
     $('#modalBody').innerHTML = `<p class="empty">No se pudo cargar el prompt: ${esc(err.message)}</p>`;
   }
@@ -1136,6 +1198,101 @@ $('#tasks').addEventListener('click', e => {
 });
 $('#startBtn').onclick = () => { state.selected = null; state.selectedSub = null; showHome(); renderAll(); };
 
+// ---------- avisos y sonidos: eventos entre dos cargas de /api/tree (sin polling propio) ----------
+const bus = new EventTarget(); // avisos y sonidos se suscriben por separado, sin conocerse entre sí
+const tracker = AgentMapEvents.createTracker({ nameOf: s => lbl(s.id).name || s.title || s.aiTitle || null }); // nunca el prompt
+const closedHere = new Map(); // id -> cuándo la cerraste tú desde Agent Map (no avisar de ese cierre)
+const toasts = AgentMapToasts.create($('#toasts'), {
+  onOpen: id => { if (findSession(id)) { setLeftTab('tree'); selectSession(id); } },
+  isBlocked: () => $('#modal').open, // con un modal abierto la página queda inerte: los avisos esperan
+});
+$('#modal').addEventListener('close', () => toasts.pump());
+const sameDir = (a, b) => !!a && !!b && a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
+function relevant(e) {
+  for (const [id, at] of closedHere) if (Date.now() - at > 120000) closedHere.delete(id); // marcas viejas: no suprimir de más
+  if (e.type === 'session-closed' && closedHere.delete(e.sessionId)) return false;
+  const terms = [...state.terms.entries()];
+  if (e.type === 'session-new') {
+    if (terms.some(([k, t]) => k === e.sessionId || t.sessionId === e.sessionId)) return false;
+    // Recién iniciada desde "Iniciar Claude" (la terminal todavía no sabe su id): misma carpeta, empezó después de abrir
+    // esa terminal y hace menos de 10 min. Una sesión externa en otra carpeta, o anterior, sí avisa.
+    const s = findSession(e.sessionId);
+    const start = Date.parse(s?.start || '') || 0;
+    const mine = terms.find(([, t]) => !t.sessionId && !t.claimed && Date.now() - t.born < 600000 && start >= t.born - 5000 && sameDir(t.cwd, s?.cwd));
+    if (mine) { mine[1].claimed = e.sessionId; return false; }
+  }
+  // La sesión de la terminal que estás mirando, con la ventana enfocada: ya lo estás viendo.
+  const act = state.terms.get(state.active);
+  const watching = act && (state.active === e.sessionId || act.sessionId === e.sessionId || act.claimed === e.sessionId);
+  if (watching && document.hasFocus() && ['message', 'finished', 'waiting', 'session-closed'].includes(e.type)) return false;
+  return true;
+}
+bus.addEventListener('events', ev => {
+  for (const e of ev.detail) toasts.showEvent(e, { session: e.sessionName, project: findSession(e.sessionId)?.project.name });
+});
+const player = AgentMapSounds.createPlayer(); // un solo reproductor: un elemento de audio por archivo, creado una vez
+const lastSoundAt = {};          // tipo -> cuándo sonó (⟳ seguidos no repiten el mismo sonido)
+const warnedSounds = new Set();  // archivos que ya avisamos que faltan (una vez por arranque)
+bus.addEventListener('events', ev => {
+  const kind = AgentMapSounds.pickSound(ev.detail); // un sonido por carga, aunque lleguen varios eventos juntos
+  if (!kind || Date.now() - (lastSoundAt[kind] || 0) < 3000) return;
+  lastSoundAt[kind] = Date.now();
+  const file = state.prefs.sounds?.[kind]?.file;
+  player.play(kind, state.prefs.sounds).then(r => { // nunca lanza; si no sonó, se avisa (una vez por archivo y arranque)
+    if ((r !== 'error' && r !== 'blocked') || !file || warnedSounds.has(file)) return;
+    warnedSounds.add(file);
+    toasts.show(r === 'blocked'
+      ? { key: 'sound-blocked', kind: 'info', title: 'Sonido bloqueado', text: 'El navegador exige un click en la página antes de reproducir sonidos.' }
+      : { key: 'sound-missing:' + file, kind: 'info', title: 'Falta un sonido', text: `${file} no está en tu carpeta de sonidos (⚙ Opciones → Sonidos)` });
+  });
+});
+
+// Copiar un mensaje: el texto original completo de ese único elemento, nunca el recortado que se ve en pantalla.
+async function copyText(text) {
+  try {
+    if (window.desktop) { // escritorio: se escribe por el proceso principal y se lee de vuelta para confirmar
+      window.desktop.writeClipboard(text);
+      return (await window.desktop.readClipboard()) === text;
+    }
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch { return false; }
+}
+let modalCopyText = null; // texto completo del mensaje que muestra el modal abierto
+// Confirmación junto al botón (✓ / ⚠); si falla, además un aviso con el motivo.
+async function copyFrom(btn, text) {
+  const has = typeof text === 'string' && text.length > 0;
+  const ok = has && await copyText(text);
+  const icon = btn.classList.contains('copy-icon');
+  btn.dataset.label ??= btn.textContent;
+  btn.dataset.aria ??= btn.getAttribute('aria-label') || '';
+  btn.textContent = ok ? (icon ? '✓' : '✓ Copiado') : (icon ? '⚠' : '⚠ No se pudo copiar');
+  btn.setAttribute('aria-label', ok ? 'Copiado' : 'No se pudo copiar');
+  btn.classList.toggle('copied', ok);
+  btn.classList.toggle('copy-failed', !ok);
+  clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(() => {
+    btn.textContent = btn.dataset.label;
+    if (btn.dataset.aria) btn.setAttribute('aria-label', btn.dataset.aria); else btn.removeAttribute('aria-label');
+    btn.classList.remove('copied', 'copy-failed');
+  }, 1800);
+  if (!ok) toasts.show({ key: 'copy', kind: 'error', title: 'No se pudo copiar',
+    text: has ? 'El portapapeles no respondió. Intenta de nuevo.' : 'Este mensaje no tiene texto para copiar.' });
+  return ok;
+}
+document.addEventListener('click', e => {
+  const one = e.target.closest('[data-copy-msg]');
+  if (one) return copyFrom(one, state.convo?.list?.[+one.dataset.copyMsg]?.text);
+  const modal = e.target.closest('[data-copy-modal]');
+  if (modal) return copyFrom(modal, modalCopyText);
+});
+// Contenido de un modal de mensaje: botón de copiar (ese mensaje y nada más) + el texto completo.
+const fullTextHtml = text => {
+  modalCopyText = text || null;
+  return (text ? '<div class="copy-bar"><button type="button" class="xpbtn small" data-copy-modal title="Copiar este mensaje completo">📋 Copiar</button></div>' : '')
+    + `<div class="prompt-full">${esc(text || '—')}</div>`;
+};
+
 // ---------- carga de datos ----------
 let firstLoad = true;
 // Cada llamada a load() (intervalo, ⟳, arranque) recibe un número; solo la más reciente aplica su respuesta.
@@ -1158,6 +1315,9 @@ async function load() {
     }
     renderAll();
     if (!state.active && $('#home').hidden === false && !$('#home .warn')) showHome();
+    // Qué cambió desde la carga anterior (la primera solo fija la referencia: nada histórico).
+    const events = tracker.update(data).filter(relevant);
+    if (events.length) bus.dispatchEvent(new CustomEvent('events', { detail: events }));
   } catch (err) {
     if (seq !== loadSeq) return; // el error de una llamada vieja no tapa el resultado de una más nueva
     // Los datos de la última carga correcta (state.projects, seen) no se tocan: solo se muestra el aviso.

@@ -4,7 +4,7 @@ import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerMonitor } f
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, killAllTerms, openTermCount, setLogger, activeRequests } from '../server.js';
+import { startServer, killAllTerms, openTermCount, setLogger, activeRequests, SOUNDS_DIR } from '../server.js';
 import { USAGE_FILE } from '../statusline-tap.js';
 import { readPrefs } from '../lib/prefs.js';
 import { startLagMonitor } from '../lib/diag.js';
@@ -154,6 +154,12 @@ ipcMain.handle('win-state', e => e.sender === win?.webContents ? { max: win.isMa
 // Portapapeles para la terminal (Ctrl+V / click derecho): la página no tiene acceso directo con sandbox.
 ipcMain.handle('clip-read', e => e.sender === win?.webContents ? clipboard.readText() : '');
 ipcMain.on('clip-write', (e, text) => { if (e.sender === win?.webContents && typeof text === 'string') clipboard.writeText(text); });
+// Carpeta de sonidos propios (ruta fija, nunca la que mande la página). true si se pudo abrir.
+ipcMain.handle('open-sounds', async e => {
+  if (e.sender !== win?.webContents) return false;
+  try { fs.mkdirSync(SOUNDS_DIR, { recursive: true }); return (await shell.openPath(SOUNDS_DIR)) === ''; }
+  catch (err) { log('no se pudo abrir la carpeta de sonidos ' + (err?.message || err)); return false; }
+});
 
 if (firstInstance) app.whenReady().then(createWindow).catch(err => {
   dialog.showErrorBox('Agent Map no pudo iniciar', String(err?.stack || err));

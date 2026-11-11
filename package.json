@@ -12,7 +12,9 @@
     "web": "node server.js",
     "test": "node --test --test-force-exit",
     "icon": "node scripts/make-icon.js",
-    "dist": "node scripts/make-icon.js && electron-builder --win nsis"
+    "dist": "node scripts/make-icon.js && electron-builder --win nsis",
+    "test:e2e": "node e2e/run.mjs",
+    "dist:local": "node scripts/dist-local.mjs"
   },
   "engines": {
     "node": ">=20"
