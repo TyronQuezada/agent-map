@@ -11,7 +11,8 @@ import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
 import { readPrefs, updatePrefs, isSoundName } from './lib/prefs.js';
 import { createTeam, teamStatus } from './lib/team.js';
-import { createThrottle, sanitize, startLagMonitor } from './lib/diag.js';
+import { createThrottle, sanitize, startLagMonitor, activity } from './lib/diag.js';
+import { TermBuffer } from './lib/termbuf.js';
 
 const HOST = '127.0.0.1';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -207,15 +208,16 @@ function startTerm({ key, label, sessionId, cwd, args, cols, rows }) {
   const shell = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'claude';
   const shellArgs = process.platform === 'win32' ? ['/c', 'claude', ...args] : args;
   const p = pty.spawn(shell, shellArgs, { name: 'xterm-256color', cols, rows, cwd, env: cleanEnv() });
-  const t = { key, label, sessionId, cwd, pty: p, buffer: '', sockets: new Set(), alive: true };
+  const t = { key, label, sessionId, cwd, pty: p, buffer: new TermBuffer(MAX_BUFFER), sockets: new Set(), alive: true };
   p.onData(d => {
-    t.buffer = (t.buffer + d).slice(-MAX_BUFFER);
+    t.buffer.push(d); // últimos MAX_BUFFER caracteres, sin copiar todo el búfer por cada trozo
+    activity.add('terminal', Buffer.byteLength(d)); // solo cantidad y bytes, nunca el contenido
     for (const ws of t.sockets) ws.send(d);
   });
   p.onExit(({ exitCode }) => {
     t.alive = false;
     const msg = `\r\n\x1b[90m[Proceso terminado, código ${exitCode}. Cierra la pestaña o vuelve a abrir la sesión.]\x1b[0m\r\n`;
-    t.buffer += msg;
+    t.buffer.append(msg);
     for (const ws of t.sockets) ws.send(msg);
   });
   terms.set(key, t);
@@ -259,7 +261,7 @@ async function onTerminal(ws, url) {
 
   t.sockets.add(ws);
   ws.send(JSON.stringify({ t: 'hello', key: t.key, label: t.label }));
-  if (t.buffer) ws.send(t.buffer);
+  if (t.buffer.length) ws.send(t.buffer.toString());
   ws.on('message', raw => {
     let m;
     try { m = JSON.parse(raw); } catch { return; }
@@ -309,7 +311,7 @@ export function startServer(port) {
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = await startServer(Number(process.env.PORT) || 4317);
   console.log(`Agent Map listo en http://localhost:${port}`);
-  if (process.env.AGENT_MAP_LAG !== '0') startLagMonitor({ log: msg => logger(msg), context: activeRequests });
+  if (process.env.AGENT_MAP_LAG !== '0') startLagMonitor({ log: msg => logger(msg), context: activeRequests, activity });
   const shutdown = () => killAllTerms().then(() => process.exit(0));
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);

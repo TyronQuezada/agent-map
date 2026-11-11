@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { startServer, killAllTerms, openTermCount, setLogger, activeRequests, SOUNDS_DIR } from '../server.js';
 import { USAGE_FILE } from '../statusline-tap.js';
 import { readPrefs } from '../lib/prefs.js';
-import { startLagMonitor } from '../lib/diag.js';
+import { startLagMonitor, activity } from '../lib/diag.js';
 
 // Diagnóstico interno: false lo apaga. Solo registra tramos del event loop ocupados más de lagThresholdMs.
 const DIAG = { lagMonitor: true, lagThresholdMs: 50 };
@@ -60,6 +60,7 @@ async function createWindow() {
   const port = await listenOnPreferredPort();
   origin = `http://127.0.0.1:${port}`;
   const prefs = readPrefs();
+  activity.add('ventana:creada');
   win = new BrowserWindow({
     width: 1400, height: 880, minWidth: 900, minHeight: 560,
     fullscreen: prefs.startFullscreen, // como apretar F11 al abrir (se cambia en ⚙ Opciones)
@@ -70,6 +71,7 @@ async function createWindow() {
   win.once('ready-to-show', () => win.show());
   const sendState = () => win.webContents.send('win-state', { max: win.isMaximized(), full: win.isFullScreen() });
   for (const ev of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen']) win.on(ev, sendState);
+  watchWindow(win);
 
   // Links externos (repos de agentes, documentación) se abren en el navegador, nunca dentro de la app.
   // Única ventana propia permitida: la oficina del equipo (para moverla a otro monitor).
@@ -82,6 +84,8 @@ async function createWindow() {
     return { action: 'deny' };
   });
   win.webContents.on('did-create-window', child => { // la oficina tampoco puede navegar fuera ni abrir otras ventanas
+    activity.add('ventana:creada');
+    watchWindow(child);
     child.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(origin)) e.preventDefault(); });
     child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     watchRenderer(child.webContents, 'oficina');
@@ -118,9 +122,16 @@ setLogger(log);
 process.on('uncaughtException', err => log('uncaughtException ' + (err?.stack || err)));
 process.on('unhandledRejection', err => log('unhandledRejection ' + (err?.stack || err)));
 if (DIAG.lagMonitor) {
-  const lag = startLagMonitor({ log, thresholdMs: DIAG.lagThresholdMs, context: activeRequests });
+  const lag = startLagMonitor({ log, thresholdMs: DIAG.lagThresholdMs, context: activeRequests, activity });
   // Al suspender el equipo el reloj salta: no es un bloqueo. (powerMonitor solo existe tras app ready.)
   app.whenReady().then(() => { powerMonitor.on('suspend', lag.pause); powerMonitor.on('resume', lag.resume); });
+}
+
+// Eventos de ventana para el monitor de bloqueos: solo cuenta cuántos hubo y cuándo (crear o redimensionar
+// una ventana es trabajo nativo en este mismo hilo). Un contador por evento, sin temporizadores.
+const WINDOW_EVENTS = ['ready-to-show', 'show', 'hide', 'resize', 'move', 'maximize', 'unmaximize', 'minimize', 'restore', 'enter-full-screen', 'leave-full-screen'];
+function watchWindow(w) {
+  for (const ev of WINDOW_EVENTS) w.on(ev, () => activity.add('ventana:' + ev));
 }
 
 // Caídas de una página (proceso renderer). Solo se registran: no hay recarga automática.
