@@ -78,6 +78,13 @@ body.resizing .term, body.resizing iframe { pointer-events: none; }
 /* Árbol */
 .tree { overflow: auto; flex: 1; padding: 4px 0 12px; }
 .section { margin: 8px 8px 2px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 700; }
+/* Encabezado plegable del árbol: mismo aspecto que .section, con ▾ abierto / ▸ plegado */
+.section-toggle { display: flex; align-items: center; gap: 4px; width: calc(100% - 16px); padding: 2px 0; border: 0; border-radius: 3px;
+  background: none; font-family: inherit; text-align: left; cursor: pointer; }
+.section-toggle::before { content: '▾'; width: 10px; font-size: 10px; flex: none; }
+.section-toggle[aria-expanded="false"]::before { content: '▸'; }
+.section-toggle:hover { color: var(--text); }
+.section-toggle:focus-visible { outline: 2px solid #9cc0f5; outline-offset: 1px; }
 .node { display: flex; align-items: center; gap: 6px; padding: 3px 8px; cursor: pointer; border-radius: 3px; margin: 0 4px; user-select: none; }
 .node:hover { background: var(--hover); }
 .node.sel { background: var(--sel); color: #fff; }

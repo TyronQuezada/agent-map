@@ -134,26 +134,43 @@ function renderTree() {
   const live = allSessions().filter(s => (s.live || openHere(s.id)) && matches(s, s.project));
   const pinned = allSessions().filter(s => lbl(s.id).pinned && matches(s, s.project));
   let html = pinned.length ? `<div class="section">📌 Fijadas (${pinned.length})</div>` + pinned.map(s => sessionNode(s, s.project)).join('') : '';
-  if (live.length) {
-    html += `<div class="section">● Activas ahora (${live.length})</div>` + live.map(s => sessionNode(s, s.project)).join('');
-  }
-  let shown = 0;
-  html += `<div class="section">Proyectos</div>`;
+  if (live.length) html += treeSection('tree:activas', '● Activas ahora', live.length, live.map(s => sessionNode(s, s.project)).join(''));
+  let shown = 0, projects = '';
   for (const p of state.projects) {
     const sessions = p.sessions.filter(s => matches(s, p));
     if (!sessions.length) continue;
     shown++;
     const open = searching || state.expandedProjects.has(p.cwd);
-    html += `<div class="node project" data-act="toggle-project" data-cwd="${esc(p.cwd)}" title="${esc(p.cwd)}">
+    projects += `<div class="node project" data-act="toggle-project" data-cwd="${esc(p.cwd)}" title="${esc(p.cwd)}">
       <span class="twisty">${open ? '▾' : '▸'}</span>${projectDot(p)}<span>${open ? '📂' : '📁'}</span>
       <span class="label">${esc(p.name)}</span>${(n => unreadBadge(n, n + " respuesta(s) nueva(s) en este proyecto"))(p.sessions.reduce((t, s) => t + unreadOf(s), 0))}<span class="badge">${sessions.length}</span></div>`;
-    if (open) html += `<div class="children">${sessions.map(s => sessionNode(s, p)).join('')}</div>`;
+    if (open) projects += `<div class="children">${sessions.map(s => sessionNode(s, p)).join('')}</div>`;
   }
-  if (!shown) html += `<div class="empty">No hay sesiones que coincidan.</div>`;
+  html += treeSection('tree:proyectos', 'Proyectos', shown, projects || `<div class="empty">No hay sesiones que coincidan.</div>`);
   tree.innerHTML = html;
 }
 
+// Secciones plegables del árbol: se recuerdan en el mismo `collapsed` que las del panel derecho.
+// Con una búsqueda escrita se ven abiertas para mostrar los resultados, sin cambiar la preferencia guardada.
+function treeSection(key, label, count, body) {
+  const forced = !!state.query && collapsed.has(key);
+  const open = !collapsed.has(key) || forced;
+  const id = 'sec-' + key.replace(':', '-');
+  return `<button type="button" class="section section-toggle" data-tree-section="${key}" aria-expanded="${open}" aria-controls="${id}"
+      title="${forced ? 'Abierta por la búsqueda; al terminar vuelve a quedar plegada' : open ? 'Plegar' : 'Desplegar'}">${label} (${count})</button>
+    <div id="${id}" role="group" aria-label="${esc(label.replace(/^\W+/, ''))}"${open ? '' : ' hidden'}>${body}</div>`;
+}
+
 $('#tree').addEventListener('click', e => {
+  const sec = e.target.closest('[data-tree-section]');
+  if (sec) { // durante una búsqueda cambia la preferencia, que se aplica al terminar la búsqueda
+    const key = sec.dataset.treeSection;
+    collapsed.has(key) ? collapsed.delete(key) : collapsed.add(key);
+    store.set('collapsed', [...collapsed]);
+    renderTree();
+    $(`[data-tree-section="${key}"]`)?.focus(); // el re-render reemplaza el botón: no perder el foco del teclado
+    return;
+  }
   const el = e.target.closest('[data-act]');
   if (!el) return;
   const { act, id } = el.dataset;
