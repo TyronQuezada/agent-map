@@ -1138,10 +1138,15 @@ $('#startBtn').onclick = () => { state.selected = null; state.selectedSub = null
 
 // ---------- carga de datos ----------
 let firstLoad = true;
+// Cada llamada a load() (intervalo, ⟳, arranque) recibe un número; solo la más reciente aplica su respuesta.
+// Así una respuesta vieja que llega tarde no pisa datos más nuevos ni vuelve a pintar.
+let loadSeq = 0;
 async function load() {
+  const seq = ++loadSeq;
   try {
     const r = await fetch('/api/tree');
     const data = await r.json();
+    if (seq !== loadSeq) return; // llegó una llamada más nueva mientras tanto
     state.projects = data.projects;
     syncSeen();
     state.repos = data.repos || {};
@@ -1154,6 +1159,8 @@ async function load() {
     renderAll();
     if (!state.active && $('#home').hidden === false && !$('#home .warn')) showHome();
   } catch (err) {
+    if (seq !== loadSeq) return; // el error de una llamada vieja no tapa el resultado de una más nueva
+    // Los datos de la última carga correcta (state.projects, seen) no se tocan: solo se muestra el aviso.
     // "Failed to fetch" = el servidor no respondió (en modo navegador: `npm run web` no está corriendo).
     $('#tree').innerHTML = `<div class="empty">${err instanceof TypeError
       ? 'Sin conexión con el servidor de Agent Map.' + (window.desktop ? '' : ' ¿Está corriendo <code>npm run web</code>?') + '<br>Reintentando cada 15 s…'
