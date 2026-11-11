@@ -66,6 +66,24 @@ test('liveSessions es asíncrona: ignora procesos muertos y archivos rotos', asy
   assert.equal(live.get(SID).status, 'busy');
 });
 
+test('liveSessions: statusUpdatedAt se conserva si es un número finito; ausente o inválido → null', async () => {
+  const dir = path.join(claude, 'sessions');
+  // Texto JSON a mano: 1e999 se lee como Infinity. NaN no existe en JSON; Number.isFinite también lo rechaza.
+  const cases = { valido: '1794370383271', texto: '"1794370383271"', infinito: '1e999', nulo: 'null', ausente: undefined };
+  const files = Object.entries(cases).map(([sid, v], i) => {
+    const file = path.join(dir, `${900001 + i}.json`);
+    fs.writeFileSync(file, `{"pid":${process.pid},"sessionId":"${sid}","status":"idle","updatedAt":5${v === undefined ? '' : ',"statusUpdatedAt":' + v}}`);
+    return file;
+  });
+  try {
+    const live = await liveSessions();
+    assert.equal(live.get('valido').statusUpdatedAt, 1794370383271);
+    for (const sid of ['texto', 'infinito', 'nulo', 'ausente']) assert.equal(live.get(sid).statusUpdatedAt, null, sid);
+    assert.equal(live.get(SID).statusUpdatedAt, null); // sesión existente sin el campo: sigue igual
+    assert.deepEqual(live.get('valido'), { pid: process.pid, status: 'idle', name: '', entrypoint: '', cwd: '', updatedAt: 5, statusUpdatedAt: 1794370383271 });
+  } finally { for (const f of files) fs.rmSync(f); }
+});
+
 test('scanAll: árbol con subagentes; un .jsonl ilegible o un meta roto no tumban el escaneo', async () => {
   fs.mkdirSync(path.join(pdir, '11111111-2222-3333-4444-555555555555.jsonl')); // "sesión" que es carpeta: falla al abrir
   const tree = await scanAll();
@@ -74,6 +92,8 @@ test('scanAll: árbol con subagentes; un .jsonl ilegible o un meta roto no tumba
   assert.equal(s.id, SID);
   assert.deepEqual(s.subagents.map(a => [a.type, a.finished]).sort(), [['artista', true], ['programador', false]]);
   assert.equal(s.live.pid, process.pid);
+  // /api/tree manda este árbol tal cual con JSON.stringify: el campo llega al cliente dentro de live (null si falta).
+  assert.equal(JSON.parse(JSON.stringify(tree))[0].sessions[0].live.statusUpdatedAt, null);
 });
 
 test('lecturas concurrentes: el mismo resultado, sin duplicados', async () => {
