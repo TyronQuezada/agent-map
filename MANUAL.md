@@ -226,7 +226,20 @@ El nombre del plan se lee de `~/.claude.json` (datos de la cuenta). Agent Map **
   - `usage.json`: último uso del plan;
   - `prefs.json`: tema, letra, pantalla completa y los nombres, colores y fijados de tus sesiones;
   - `statusline-tap.mjs`: copia del intermediario de la statusline;
+  - `agentmap-hook.mjs` y `events/`: el hook oficial de Claude Code y sus registros (ver abajo);
   - `agent-map.log`: registro de arranque, cierre y errores.
+
+### 🪝 Hook de Claude Code (opcional, por proyecto)
+
+Sin el hook, Agent Map deduce el estado de cada sesión de `~/.claude/sessions/*.json`. Con el hook, Claude Code le **avisa** cada evento oficial: más exacto, al instante, y con la herramienta que está usando.
+
+- **Instalar:** click derecho en un proyecto → **🪝 Hook de Claude Code…**. La ventana explica qué cambia y muestra el archivo tal como quedaría; nada se escribe hasta que aprietas **Instalar en este proyecto**.
+- **Qué cambia:** solo `<proyecto>/.claude/settings.local.json` (tu configuración personal de Claude Code para esa carpeta; no se sube a git). Se agrega un comando `node "~/.agent-map/agentmap-hook.mjs"` en 12 eventos, en segundo plano (`async`): nunca demora ni bloquea a Claude. Si el archivo ya existía, antes se guarda una copia en `settings.local.json.agentmap-backup`. Nunca se toca `~/.claude/settings.json` ni otros proyectos, y no se puede instalar en tu carpeta de usuario ni en una raíz.
+- **Quitar:** la misma ventana → **Quitar el hook**. Se borran solo los comandos de Agent Map; si el archivo lo había creado Agent Map y queda vacío, se borra.
+- **Eventos:** SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest, Notification, Stop, StopFailure, SubagentStart y SubagentStop.
+- **Qué se guarda** (en `~/.agent-map/events/<sesión>.jsonl`, una línea por evento): tipo de evento, sesión, carpeta, modo de permisos, nombre de la herramienta, id de la llamada, duración, tipo de aviso, id y tipo de subagente y la ruta de los archivos editados. **Nunca** tus prompts, las respuestas, los comandos, el contenido de archivos, la salida de las herramientas ni el texto de los avisos. Los registros sin actividad en 30 días se borran solos.
+- **Diagnóstico:** ⚙ Opciones → **🪝 Hook de Claude Code** dice si el script está listo, si hay `node` en el PATH (el hook lo necesita) y cuándo llegó el último evento. La ventana de cada proyecto dice si está instalado y si llegan eventos de esa carpeta.
+- Requiere Claude Code con hooks (probado con la 2.1.322). Las sesiones que ya estaban abiertas al instalar empiezan a enviar eventos al reiniciarlas.
 
 ### Seguridad
 

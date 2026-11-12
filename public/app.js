@@ -79,7 +79,8 @@ function dotClass(s) {
 }
 function dotTitle(s) {
   if (openHere(s.id)) return 'Abierta en Agent Map';
-  if (s.live) return s.live.status === 'busy' ? 'Trabajando en otra terminal' : 'Abierta en otra terminal (en espera)';
+  if (s.live?.status === 'waiting') return 'Esperando que intervengas (permiso o respuesta)';
+  if (s.live) return s.live.status === 'busy' ? 'Trabajando en otra terminal' + (s.live.activity?.tool ? ` · ${s.live.activity.tool}` : '') : 'Abierta en otra terminal (en espera)';
   return 'Cerrada';
 }
 
@@ -245,11 +246,62 @@ function openProjectMenu(x, y, cwd) {
   const has = p.sessions.some(s => Object.keys(lbl(s.id)).length || unreadOf(s));
   showMenu(x, y, 'Opciones del proyecto', `
     <button role="menuitem" data-ctx="hide">🙈 Ocultar proyecto</button>
+    <button role="menuitem" data-ctx="hook">🪝 Hook de Claude Code…</button>
     <hr>
     <button role="menuitem" data-ctx="forget" ${has ? '' : 'disabled'}>🧹 Borrar datos de Agent Map del proyecto…</button>`, async act => {
     if (act === 'hide') await hideItem({ project: cwd }, `Proyecto oculto: ${p.name}`);
+    else if (act === 'hook') await showHookModal(cwd, p.name);
     else if (act === 'forget') await forgetMeta(p.sessions.map(s => ({ ...s, project: p })), `del proyecto <b>${esc(p.name)}</b> (${p.sessions.length} sesión${p.sessions.length > 1 ? 'es' : ''})`);
   });
+}
+
+/**
+ * Hook oficial de Claude Code en UNA carpeta: estado, qué cambia exactamente y botones para instalar o quitar.
+ * Nada se escribe hasta que el usuario aprieta el botón; la vista previa es el archivo tal como quedaría.
+ */
+async function showHookModal(dir, name) {
+  const draw = (info, msg = '') => {
+    const err = info.error;
+    const status = err ? '' : info.installed ? '✅ Instalado en este proyecto' : info.partial ? '⚠ Instalado en parte (faltan eventos)' : '⭕ No instalado';
+    const last = info.lastEventAt ? `último evento recibido ${ago(new Date(info.lastEventAt).toISOString())}` : 'todavía no llegó ningún evento de este proyecto';
+    openModal('🪝 Hook de Claude Code · ' + name, err ? `<p class="confirm-msg">${esc(err)}</p>
+      <div class="modal-actions"><button class="xpbtn" data-close-modal>Cerrar</button></div>` : `
+      <p class="confirm-msg"><b>${status}</b>${info.installed ? ` · ${last}` : ''}</p>
+      <p class="muted">Con el hook, Claude Code le avisa a Agent Map cada vez que empieza o termina un turno, usa una herramienta,
+        pide permiso o abre un subagente. Así los estados y avisos son exactos y ves la actividad por herramienta.</p>
+      <p class="muted"><b>Qué cambia:</b> solo el archivo <code>${esc(info.file)}</code> (tu configuración personal de Claude Code
+        para esta carpeta; no se comparte en git). Se agrega, para ${info.events?.length || ''} eventos (${(info.events || []).join(', ')}), un comando que corre en segundo plano
+        (no demora ni bloquea a Claude). ${info.exists ? 'Antes se guarda una copia del archivo actual (<code>.agentmap-backup</code>).' : 'El archivo no existe: se crea, y al quitar el hook se borra.'}
+        No se toca <code>~/.claude/settings.json</code> ni ningún otro proyecto.</p>
+      <p class="muted"><b>Qué guarda:</b> en <code>~/.agent-map/events</code>, solo el tipo de evento, la sesión, la carpeta, el nombre de la
+        herramienta y la ruta de los archivos editados. Nunca tus prompts, las respuestas, los comandos ni el contenido de archivos.</p>
+      <details><summary>Ver el archivo como quedaría ${info.installed ? 'al quitar el hook' : 'al instalar'}</summary>
+        <pre class="hook-preview">${esc(JSON.stringify(info.installed ? info.afterUninstall : info.afterInstall, null, 2))}</pre></details>
+      <p class="picker-msg" id="hookMsg" role="status">${esc(msg)}</p>
+      <div class="modal-actions">
+        <button type="button" class="xpbtn" data-close-modal>Cerrar</button>
+        ${info.installed || info.partial ? '<button type="button" class="xpbtn" data-hook="uninstall">Quitar el hook</button>' : ''}
+        ${info.installed ? '' : '<button type="button" class="xpbtn primary" data-hook="install">Instalar en este proyecto</button>'}
+      </div>`, { sticky: true });
+    $('#modalBody').onclick = async e => {
+      const b = e.target.closest('[data-hook]');
+      if (!b) return;
+      b.disabled = true;
+      try {
+        const r = await fetch('/api/hook/project', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ dir, install: b.dataset.hook === 'install' }) });
+        if (!r.ok) throw new Error(await r.text());
+        const res = await r.json();
+        draw(res, b.dataset.hook === 'install' ? 'Instalado. Las sesiones de Claude que abras desde ahora en esta carpeta enviarán eventos.' : 'Hook quitado.');
+      } catch (err) { $('#hookMsg').textContent = err.message; b.disabled = false; }
+    };
+  };
+  let info;
+  try {
+    const r = await fetch('/api/hook/project?dir=' + encodeURIComponent(dir));
+    info = r.ok ? await r.json() : { error: await r.text() };
+  } catch (err) { info = { error: err.message }; }
+  draw(info);
 }
 
 /** Oculta una sesión ({ session: id }) o un proyecto ({ project: cwd }) y avisa dónde recuperarlo. */
@@ -420,6 +472,8 @@ function showOptions() {
     <div class="opt-row sound-dir">${window.desktop ? '<button type="button" class="xpbtn small" id="optSndFolder">📂 Abrir carpeta de sonidos</button>' : ''}
       <small class="muted" id="optSndDir">Los sonidos no vienen con Agent Map: agrega tus propios archivos mp3, wav u ogg.</small></div>
     <p class="muted" id="optSndMsg" role="status"></p>
+    <h4 class="opt-head">🪝 Hook de Claude Code</h4>
+    <div id="optHook" class="muted">Comprobando…</div>
     <h4 class="opt-head">Ocultos</h4>
     <div id="optHidden">${hiddenRows()}</div>
     <h4 class="opt-head">Acerca de</h4>
@@ -437,6 +491,7 @@ function showOptions() {
     drawSounds();
   };
   refreshSounds();
+  fetch('/api/hook').then(r => r.ok ? r.json() : null).then(d => { if (d && $('#optHook')) $('#optHook').innerHTML = hookDiagHtml(d); }).catch(() => {});
   const save = async patch => {
     try { await savePrefs(patch); $('#optMsg').textContent = ''; }
     catch (err) { $('#optMsg').textContent = err.message; }
@@ -485,6 +540,15 @@ function showOptions() {
     if (e.target.dataset.sndFile) save({ sounds: { [e.target.dataset.sndFile]: { file: e.target.value } } }).then(drawSounds);
   };
   body.oninput = e => { if (e.target.id === 'optVol') $('#optVolTxt').textContent = e.target.value + ' %'; };
+}
+// Diagnóstico del hook oficial para ⚙ Opciones: si el script está listo, si hay node y si llegan eventos.
+function hookDiagHtml(d) {
+  const ok = v => v ? '✅' : '⚠';
+  return `<div class="opt-row">${ok(d.copied)} Script listo en <code>${esc(d.hookFile)}</code></div>
+    <div class="opt-row">${ok(d.node)} ${d.node ? 'node está en el PATH (el hook lo usa para correr)' : 'No se encontró node en el PATH: sin él el hook no corre (Claude Code lo ignora sin fallar)'}</div>
+    <div class="opt-row">${ok(d.lastEventAt)} ${d.lastEventAt ? `Eventos recibidos de ${d.sessions} sesión${d.sessions > 1 ? 'es' : ''}; el último ${ago(new Date(d.lastEventAt).toISOString())}` : 'Todavía no llegó ningún evento'}</div>
+    <p class="muted">Se instala por proyecto y solo si lo pides: click derecho en un proyecto → 🪝 Hook de Claude Code…
+      Sin el hook, Agent Map sigue usando ~/.claude/sessions como hasta ahora.</p>`;
 }
 // Lista de ⚙ Opciones › Ocultos, con un botón para volver a mostrar cada uno. Nombres escapados: son del usuario.
 function hiddenRows() {
@@ -1068,6 +1132,7 @@ function renderStatsInner() {
       ['Proyecto', s.project.name], ['Rama', s.branch || '—'], ['Estado', dotTitle(s)],
       ['Inicio', dateTime(s.start)], ['Última actividad', dateTime(s.end)], ['Duración', duration(s.start, s.end)],
     ]), 'Datos de la sesión') +
+    activityGroup(s.live?.activity) +
     group('💬 Qué pasó', `<small>Primer prompt</small>${promptBtn(s.firstPrompt, 'first')}
       <small>Último prompt</small>${promptBtn(s.lastPrompt, 'last')}
       ${kv([['Prompts tuyos', s.prompts], ['Respuestas de Claude', s.assistantMsgs]])}`) +
@@ -1081,6 +1146,17 @@ function renderStatsInner() {
   if (c?.list) el.scrollTop = keepTop ?? el.scrollHeight; // al abrir: lo más reciente abajo
   else messages(s).then(() => { if (state.selected === s.id) renderStats(); })
     .catch(err => { if ($('#convo')) $('#convo').innerHTML = `<p class="empty">No se pudo cargar la conversación: ${esc(err.message)}</p>`; });
+}
+
+// Actividad por herramienta que informa el hook oficial (solo si está instalado en ese proyecto). Sin contenido.
+function activityGroup(a) {
+  if (!a) return '';
+  const total = Object.values(a.tools || {}).reduce((t, n) => t + n, 0);
+  return group('🪝 Actividad (hook de Claude Code)', kv([
+    ['Ahora', a.tool ? `usando ${a.tool}` : '—'], ['Herramientas usadas', total], ['Archivos modificados', a.files],
+    ['Herramientas que fallaron', a.failures], ['Subagentes trabajando', a.agents],
+    ['Último evento', a.lastEventAt ? ago(new Date(a.lastEventAt).toISOString()) : '—'],
+  ]) + (total ? bars(a.tools) : ''));
 }
 
 // Conversación de la sesión (prompts + respuestas). Se pide aparte y se recuerda hasta que la sesión cambie.

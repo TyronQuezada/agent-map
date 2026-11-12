@@ -6,13 +6,15 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
-import { scanAll, liveSessions, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
+import { scanAll, liveSessions, useHookStates, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
 import { readPrefs, updatePrefs, isSoundName } from './lib/prefs.js';
 import { createTeam, teamStatus } from './lib/team.js';
 import { createThrottle, sanitize, startLagMonitor, activity } from './lib/diag.js';
 import { TermBuffer } from './lib/termbuf.js';
+import { ensureHookFile, pruneEvents, hookDiagnostics, projectHook, setProjectHook, lastEventIn, hookStates } from './lib/hooks.js';
+useHookStates(hookStates); // estado del hook oficial en liveSessions (respaldo: sessions/*.json)
 
 const HOST = '127.0.0.1';
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -56,13 +58,14 @@ async function readJson(req) {
 
 // ---- En vivo: GET /api/events (Server-Sent Events) avisa en ~1 s cuando una sesión de Claude cambia de estado
 // (trabajando, terminó, espera permiso) o se abre o cierra, para que la página recargue sin esperar su intervalo.
-// Solo mira ~/.claude/sessions/*.json (archivos chicos) y solo mientras haya una página conectada.
+// Mira ~/.claude/sessions/*.json y los registros del hook (~/.agent-map/events), y solo mientras haya una página conectada.
 export const LIVE_POLL_MS = 1000;
 const liveClients = new Set();
 let liveTimer = null, liveSig = null, livePolling = false;
 // Huella del estado en vivo: cambia con cualquier transición, aunque entre dos lecturas haya pasado por otro estado.
 async function liveSignature() {
-  return [...await liveSessions()].map(([id, l]) => `${id}:${l.pid}:${l.status}:${l.statusUpdatedAt ?? ''}`).sort().join(',');
+  // Con el hook, también la herramienta en uso: el panel muestra qué está haciendo (como mucho una recarga por segundo).
+  return [...await liveSessions()].map(([id, l]) => `${id}:${l.pid}:${l.status}:${l.statusUpdatedAt ?? ''}${l.activity ? ':' + (l.activity.tool || '') : ''}`).sort().join(',');
 }
 const sendLive = (res, sig) => res.write(`event: live\ndata: ${JSON.stringify(sig)}\n\n`);
 async function pollLive() {
@@ -147,6 +150,19 @@ const server = http.createServer(async (req, res) => {
       // porque teamStatus no encuentra el archivo del equipo.
       const dir = url.searchParams.get('dir');
       return json(res, typeof dir === 'string' && path.isAbsolute(dir) ? await teamStatus(dir) : null);
+    }
+    if (url.pathname === '/api/hook') return json(res, await hookDiagnostics()); // diagnóstico: ¿llegan eventos?
+    if (url.pathname === '/api/hook/project') {
+      // Hook oficial en UNA carpeta, solo cuando el usuario lo pide. GET = estado y vista previa (no escribe nada).
+      try {
+        if (req.method !== 'POST') { const info = projectHook(url.searchParams.get('dir'), CLAUDE_DIR); return json(res, { ...info, lastEventAt: await lastEventIn(info.dir) }); }
+        // Escribe en la carpeta del proyecto: solo desde la propia página, y con la acción explícita.
+        if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
+        const body = await readJson(req);
+        if (typeof body?.install !== 'boolean') throw new Error('Acción inválida');
+        if (body.install) ensureHookFile(); // el comando apunta a ~/.agent-map/agentmap-hook.mjs: que exista
+        return json(res, setProjectHook(body.dir, CLAUDE_DIR, body.install));
+      } catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
     }
     if (url.pathname === '/api/prefs') {
       if (req.method !== 'POST') return json(res, readPrefs());
@@ -342,8 +358,15 @@ export function startServer(port) {
   });
 }
 
+/** Al abrir la app: copia agentmap-hook a ~/.agent-map (si cambió) y borra registros de eventos viejos. Nada de Claude Code. */
+export function prepareHook() {
+  try { ensureHookFile(); } catch (err) { logger('no se pudo copiar agentmap-hook: ' + sanitize(err.message)); }
+  pruneEvents().catch(() => {});
+}
+
 // Modo navegador: `npm run web` (o `node server.js`).
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  prepareHook();
   const port = await startServer(Number(process.env.PORT) || 4317);
   console.log(`Agent Map listo en http://localhost:${port}`);
   if (process.env.AGENT_MAP_LAG !== '0') startLagMonitor({ log: msg => logger(msg), context: activeRequests, activity });

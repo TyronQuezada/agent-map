@@ -4,7 +4,7 @@ import { app, BrowserWindow, ipcMain, shell, dialog, clipboard, powerMonitor } f
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startServer, killAllTerms, openTermCount, setLogger, activeRequests, SOUNDS_DIR } from '../server.js';
+import { startServer, killAllTerms, openTermCount, setLogger, activeRequests, SOUNDS_DIR, prepareHook } from '../server.js';
 import { USAGE_FILE } from '../statusline-tap.js';
 import { readPrefs } from '../lib/prefs.js';
 import { startLagMonitor, activity } from '../lib/diag.js';
@@ -57,6 +57,7 @@ async function listenOnPreferredPort() {
 
 async function createWindow() {
   installTap();
+  prepareHook(); // copia agentmap-hook a ~/.agent-map; instalarlo en un proyecto es siempre una acción explícita
   const port = await listenOnPreferredPort();
   origin = `http://127.0.0.1:${port}`;
   const prefs = readPrefs();
