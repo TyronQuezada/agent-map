@@ -77,7 +77,13 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 - **🎨 Color:** 8 colores (o ninguno). La sesión se marca con una franja y el nombre de ese color; sirve para agrupar por cliente, urgencia, etc.
 - **📌 Fijar arriba:** la sesión aparece en la sección **Fijadas**, al principio del árbol.
 - **📋 Copiar ID de la sesión:** para usar `claude --resume <id>` en otra terminal.
+- **🙈 Ocultar sesión:** deja de aparecer en el árbol (también al buscar) y no da avisos ni sonidos. La conversación sigue intacta.
 - **↺ Restablecer:** quita nombre, color y fijado.
+- **🧹 Borrar datos de Agent Map…:** después de confirmar, borra lo que Agent Map guarda de la sesión: nombre, color, fijado y las marcas de leído/no leído (las respuestas quedan como leídas). No toca nada de Claude Code: ni la conversación, ni `~/.claude`, ni la carpeta del proyecto.
+
+**Click derecho en un proyecto** → **🙈 Ocultar proyecto** (con todas sus sesiones) o **🧹 Borrar datos de Agent Map del proyecto…** (lo mismo que arriba, para todas sus sesiones).
+
+**Recuperar lo oculto:** ⚙ Opciones → **Ocultos** (o el aviso "🙈 N ocultos" al pie del árbol) → **👁 Mostrar**. Vuelve igual que estaba, sin avisos de lo que llegó mientras estuvo oculto. Lo oculto se guarda en `~/.agent-map/prefs.json` y se mantiene al reiniciar.
 
 El menú también se usa con el teclado: ↑ ↓ para moverse, Enter para elegir, Esc para cerrar.
 

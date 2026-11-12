@@ -14,6 +14,9 @@ const THEMES = {
 const COLORS = { red: ['Rojo', '#e5484d'], orange: ['Naranja', '#f5a524'], yellow: ['Amarillo', '#d4b106'], green: ['Verde', '#30a46c'],
   teal: ['Turquesa', '#12a594'], blue: ['Azul', '#3e7bfa'], purple: ['Morado', '#8e4ec6'], pink: ['Rosa', '#e93d82'] };
 const lbl = id => state.prefs.labels[id] || {};
+// Ocultos (prefs.hidden): la sesión misma o todo su proyecto (por carpeta). Solo cambia lo que muestra Agent Map.
+const isHidden = (s, p = s.project) => !!state.prefs.hidden && (state.prefs.hidden.sessions.includes(s.id) || state.prefs.hidden.projects.includes(p?.cwd));
+const hiddenCount = () => state.prefs.hidden ? state.prefs.hidden.sessions.length + state.prefs.hidden.projects.length : 0;
 
 async function savePrefs(patch) {
   const r = await fetch('/api/prefs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(patch) });
@@ -44,7 +47,7 @@ const state = {
   expandedSessions: new Set(),
   terms: new Map(),          // key -> { term, fit, ws, el, label, sessionId }
   active: null,              // key de la terminal visible (null = inicio)
-  prefs: { theme: store.get('theme', 'xp'), fontSize: 13, startFullscreen: true, labels: {} },
+  prefs: { theme: store.get('theme', 'xp'), fontSize: 13, startFullscreen: true, labels: {}, hidden: { sessions: [], projects: [] } },
 };
 if (!THEMES[state.prefs.theme]) state.prefs.theme = 'xp';
 
@@ -91,6 +94,7 @@ function projectDot(p) {
 
 // ---------- filtros ----------
 function matches(s, p) {
+  if (isHidden(s, p)) return false; // ocultos: fuera del árbol, también al buscar (se recuperan en ⚙ Opciones)
   const now = Date.now();
   if (state.filter === 'live' && !s.live && !openHere(s.id)) return false;
   if (state.filter === 'today' && now - new Date(s.end) > 86400e3) return false;
@@ -128,7 +132,7 @@ function sessionNode(s, p) {
 
 function renderTree() {
   const tree = $('#tree');
-  if (!state.expandedProjects) state.expandedProjects = new Set(state.projects.slice(0, 3).map(p => p.cwd));
+  if (!state.expandedProjects && state.projects.length) state.expandedProjects = new Set(state.projects.slice(0, 3).map(p => p.cwd)); // con datos: un primer dibujo sin ellos no deja todo plegado
   const searching = !!state.query || state.filter !== 'all';
 
   const live = allSessions().filter(s => (s.live || openHere(s.id)) && matches(s, s.project));
@@ -140,13 +144,15 @@ function renderTree() {
     const sessions = p.sessions.filter(s => matches(s, p));
     if (!sessions.length) continue;
     shown++;
-    const open = searching || state.expandedProjects.has(p.cwd);
+    const open = searching || state.expandedProjects?.has(p.cwd);
     projects += `<div class="node project" data-act="toggle-project" data-cwd="${esc(p.cwd)}" title="${esc(p.cwd)}">
       <span class="twisty">${open ? '▾' : '▸'}</span>${projectDot(p)}<span>${open ? '📂' : '📁'}</span>
-      <span class="label">${esc(p.name)}</span>${(n => unreadBadge(n, n + " respuesta(s) nueva(s) en este proyecto"))(p.sessions.reduce((t, s) => t + unreadOf(s), 0))}<span class="badge">${sessions.length}</span></div>`;
+      <span class="label">${esc(p.name)}</span>${(n => unreadBadge(n, n + " respuesta(s) nueva(s) en este proyecto"))(p.sessions.filter(s => !isHidden(s, p)).reduce((t, s) => t + unreadOf(s), 0))}<span class="badge">${sessions.length}</span></div>`;
     if (open) projects += `<div class="children">${sessions.map(s => sessionNode(s, p)).join('')}</div>`;
   }
-  html += treeSection('tree:proyectos', 'Proyectos', shown, projects || `<div class="empty">No hay sesiones que coincidan.</div>`);
+  const nHidden = hiddenCount();
+  html += treeSection('tree:proyectos', 'Proyectos', shown, (projects || `<div class="empty">No hay sesiones que coincidan.</div>`)
+    + (nHidden ? `<button type="button" class="hidden-note" data-act="show-hidden" title="Verlos y recuperarlos en ⚙ Opciones">🙈 ${nHidden} oculto${nHidden > 1 ? 's' : ''} · ver en Opciones</button>` : ''));
   tree.innerHTML = html;
 }
 
@@ -184,6 +190,7 @@ $('#tree').addEventListener('click', e => {
     state.expandedProjects.has(cwd) ? state.expandedProjects.delete(cwd) : state.expandedProjects.add(cwd);
     return renderTree();
   }
+  if (act === 'show-hidden') { showOptions(); $('#optHidden')?.scrollIntoView({ block: 'center' }); return; }
   if (act === 'sub') { state.selected = id; state.selectedSub = el.dataset.sub; renderAll(); return; }
   if (act === 'session') selectSession(id);
 });
@@ -191,9 +198,11 @@ $('#tree').addEventListener('click', e => {
 // ---------- menú contextual de una sesión (click derecho) ----------
 $('#tree').addEventListener('contextmenu', e => {
   const el = e.target.closest('[data-act="session"]');
-  if (!el) return;
+  const proj = !el && e.target.closest('[data-act="toggle-project"]');
+  if (!el && !proj) return;
   e.preventDefault();
-  openCtxMenu(e.clientX, e.clientY, el.dataset.id);
+  if (el) openCtxMenu(e.clientX, e.clientY, el.dataset.id);
+  else openProjectMenu(e.clientX, e.clientY, proj.dataset.cwd);
 });
 const closeCtxMenu = () => document.querySelector('.ctxmenu')?.remove();
 document.addEventListener('mousedown', e => { if (!e.target.closest('.ctxmenu')) closeCtxMenu(); });
@@ -201,31 +210,19 @@ document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtxMenu
 window.addEventListener('blur', closeCtxMenu);
 window.addEventListener('resize', closeCtxMenu);
 
-function openCtxMenu(x, y, id) {
+// Menú flotante: posición dentro de la pantalla, foco y flechas. onAct(acción, botón) se llama ya cerrado el menú.
+function showMenu(x, y, label, html, onAct) {
   closeCtxMenu();
-  const s = findSession(id);
-  if (!s) return;
-  const l = lbl(id);
   const m = document.createElement('div');
   m.className = 'ctxmenu';
   m.setAttribute('role', 'menu');
-  m.setAttribute('aria-label', 'Opciones de la sesión');
-  m.innerHTML = `
-    <button role="menuitem" data-ctx="open">▶ Abrir</button>
-    <button role="menuitem" data-ctx="rename">✏️ Cambiar nombre…</button>
-    <div class="ctx-label">🎨 Color</div>
-    <div class="ctx-colors">${Object.entries(COLORS).map(([c, [name, hex]]) =>
-      `<button role="menuitemradio" aria-checked="${l.color === c}" data-ctx="color" data-color="${c}" title="${name}" aria-label="${name}" style="--c:${hex}"></button>`).join('')}
-      <button role="menuitemradio" aria-checked="${!l.color}" data-ctx="color" data-color="" class="none" title="Sin color" aria-label="Sin color">✕</button></div>
-    <button role="menuitem" data-ctx="pin">📌 ${l.pinned ? 'Quitar de fijadas' : 'Fijar arriba'}</button>
-    <button role="menuitem" data-ctx="copy">📋 Copiar ID de la sesión</button>
-    <hr>
-    <button role="menuitem" data-ctx="reset" ${Object.keys(l).length ? '' : 'disabled'}>↺ Restablecer nombre, color y fijado</button>`;
+  m.setAttribute('aria-label', label);
+  m.innerHTML = html;
   document.body.appendChild(m);
   // Dentro de la pantalla aunque el click sea cerca de un borde.
   m.style.left = Math.min(x, innerWidth - m.offsetWidth - 4) + 'px';
   m.style.top = Math.min(y, innerHeight - m.offsetHeight - 4) + 'px';
-  m.querySelector('button').focus();
+  m.querySelector('button:not(:disabled)')?.focus();
   m.addEventListener('keydown', e => { // flechas para moverse por el menú
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
@@ -237,15 +234,76 @@ function openCtxMenu(x, y, id) {
     const b = e.target.closest('[data-ctx]');
     if (!b) return;
     closeCtxMenu();
-    const act = b.dataset.ctx;
-    try {
-      if (act === 'open') selectSession(id);
-      else if (act === 'rename') renameSession(s);
-      else if (act === 'color') await savePrefs({ label: { id, color: b.dataset.color || null } });
-      else if (act === 'pin') await savePrefs({ label: { id, pinned: !l.pinned } });
-      else if (act === 'copy') writeClipboard(id);
-      else if (act === 'reset') await savePrefs({ label: { id, reset: true } });
-    } catch (err) { openModal('No se pudo guardar', `<p class="confirm-msg">${esc(err.message)}</p>`); }
+    try { await onAct(b.dataset.ctx, b); }
+    catch (err) { openModal('No se pudo guardar', `<p class="confirm-msg">${esc(err.message)}</p>`); }
+  });
+}
+
+function openProjectMenu(x, y, cwd) {
+  const p = state.projects.find(q => q.cwd === cwd);
+  if (!p) return;
+  const has = p.sessions.some(s => Object.keys(lbl(s.id)).length || unreadOf(s));
+  showMenu(x, y, 'Opciones del proyecto', `
+    <button role="menuitem" data-ctx="hide">🙈 Ocultar proyecto</button>
+    <hr>
+    <button role="menuitem" data-ctx="forget" ${has ? '' : 'disabled'}>🧹 Borrar datos de Agent Map del proyecto…</button>`, async act => {
+    if (act === 'hide') await hideItem({ project: cwd }, `Proyecto oculto: ${p.name}`);
+    else if (act === 'forget') await forgetMeta(p.sessions.map(s => ({ ...s, project: p })), `del proyecto <b>${esc(p.name)}</b> (${p.sessions.length} sesión${p.sessions.length > 1 ? 'es' : ''})`);
+  });
+}
+
+/** Oculta una sesión ({ session: id }) o un proyecto ({ project: cwd }) y avisa dónde recuperarlo. */
+async function hideItem(target, title) {
+  await savePrefs({ hide: { ...target, hidden: true } });
+  toasts.show({ key: 'hidden:' + (target.session || target.project), kind: 'info', title, text: 'Para volver a verlo: ⚙ Opciones › Ocultos.' });
+}
+
+/**
+ * Borra lo que Agent Map guarda de esas sesiones (nombre, color, fijado y marcas de leído), tras confirmar.
+ * No toca nada de Claude Code: ni la conversación (~/.claude) ni la carpeta del proyecto.
+ */
+async function forgetMeta(sessions, what) {
+  // Dentro de un <p> (confirmModal): saltos de línea, no listas.
+  const ok = await confirmModal('🧹 Borrar datos de Agent Map', `Se borra solo lo que Agent Map guarda ${what}:<br>
+    • nombre personalizado<br>• color<br>• fijada arriba (📌)<br>• marcas de leído y no leído: las respuestas quedan como leídas<br><br>
+    <b>No se toca nada de Claude Code:</b> la conversación, sus archivos en <code>~/.claude</code> y la carpeta del proyecto quedan igual.
+    Lo que esté oculto sigue oculto.`, 'Borrar datos');
+  if (!ok) return false;
+  await savePrefs({ forget: { ids: sessions.map(s => s.id) } });
+  for (const s of sessions) { // no leídos: misma referencia que una sesión recién vista (sin globito rojo)
+    seen[s.id] = s.claudeMsgs || 0;
+    for (const k of [...flashed]) if (k.startsWith(s.id + ':')) flashed.delete(k);
+  }
+  store.set('seen', seen);
+  renderAll();
+  return true;
+}
+
+function openCtxMenu(x, y, id) {
+  const s = findSession(id);
+  if (!s) return;
+  const l = lbl(id);
+  showMenu(x, y, 'Opciones de la sesión', `
+    <button role="menuitem" data-ctx="open">▶ Abrir</button>
+    <button role="menuitem" data-ctx="rename">✏️ Cambiar nombre…</button>
+    <div class="ctx-label">🎨 Color</div>
+    <div class="ctx-colors">${Object.entries(COLORS).map(([c, [name, hex]]) =>
+      `<button role="menuitemradio" aria-checked="${l.color === c}" data-ctx="color" data-color="${c}" title="${name}" aria-label="${name}" style="--c:${hex}"></button>`).join('')}
+      <button role="menuitemradio" aria-checked="${!l.color}" data-ctx="color" data-color="" class="none" title="Sin color" aria-label="Sin color">✕</button></div>
+    <button role="menuitem" data-ctx="pin">📌 ${l.pinned ? 'Quitar de fijadas' : 'Fijar arriba'}</button>
+    <button role="menuitem" data-ctx="copy">📋 Copiar ID de la sesión</button>
+    <button role="menuitem" data-ctx="hide">🙈 Ocultar sesión</button>
+    <hr>
+    <button role="menuitem" data-ctx="reset" ${Object.keys(l).length ? '' : 'disabled'}>↺ Restablecer nombre, color y fijado</button>
+    <button role="menuitem" data-ctx="forget" ${Object.keys(l).length || unreadOf(s) ? '' : 'disabled'}>🧹 Borrar datos de Agent Map…</button>`, async (act, b) => {
+    if (act === 'open') selectSession(id);
+    else if (act === 'rename') renameSession(s);
+    else if (act === 'color') await savePrefs({ label: { id, color: b.dataset.color || null } });
+    else if (act === 'pin') await savePrefs({ label: { id, pinned: !l.pinned } });
+    else if (act === 'copy') writeClipboard(id);
+    else if (act === 'hide') await hideItem({ session: id }, `Sesión oculta: ${title(s)}`);
+    else if (act === 'reset') await savePrefs({ label: { id, reset: true } });
+    else if (act === 'forget') await forgetMeta([s], `de la sesión <b>${esc(title(s))}</b>`);
   });
 }
 
@@ -362,6 +420,8 @@ function showOptions() {
     <div class="opt-row sound-dir">${window.desktop ? '<button type="button" class="xpbtn small" id="optSndFolder">📂 Abrir carpeta de sonidos</button>' : ''}
       <small class="muted" id="optSndDir">Los sonidos no vienen con Agent Map: agrega tus propios archivos mp3, wav u ogg.</small></div>
     <p class="muted" id="optSndMsg" role="status"></p>
+    <h4 class="opt-head">Ocultos</h4>
+    <div id="optHidden">${hiddenRows()}</div>
     <h4 class="opt-head">Acerca de</h4>
     <button class="xpbtn primary" id="optAbout">📖 Cómo funciona Agent Map (guía paso a paso)</button>
     <p class="picker-msg" id="optMsg" role="alert"></p>`);
@@ -383,6 +443,13 @@ function showOptions() {
   };
   body.onclick = async e => {
     if (e.target.id === 'optAbout') return showAbout();
+    const un = e.target.closest('[data-unhide]');
+    if (un) {
+      await save({ hide: { [un.dataset.unhide]: un.dataset.value, hidden: false } });
+      $('#optHidden').innerHTML = hiddenRows();
+      $('#optHidden button')?.focus(); // el botón se reemplazó: el teclado sigue en la lista
+      return;
+    }
     if (e.target.id === 'optSndFolder') {
       const ok = await window.desktop.openSoundsFolder();
       $('#optSndMsg').textContent = ok ? 'Copia ahí tus archivos de audio; la lista se actualiza al volver a esta ventana.' : 'No se pudo abrir la carpeta.';
@@ -418,6 +485,25 @@ function showOptions() {
     if (e.target.dataset.sndFile) save({ sounds: { [e.target.dataset.sndFile]: { file: e.target.value } } }).then(drawSounds);
   };
   body.oninput = e => { if (e.target.id === 'optVol') $('#optVolTxt').textContent = e.target.value + ' %'; };
+}
+// Lista de ⚙ Opciones › Ocultos, con un botón para volver a mostrar cada uno. Nombres escapados: son del usuario.
+function hiddenRows() {
+  const h = state.prefs.hidden || { sessions: [], projects: [] };
+  if (!h.sessions.length && !h.projects.length) {
+    return '<p class="muted">No hay nada oculto. Click derecho en una sesión o un proyecto del árbol → 🙈 Ocultar.</p>';
+  }
+  const row = (icon, name, detail, kind, value) => `<div class="opt-row hidden-row">
+      <span class="hidden-name">${icon} ${esc(name)}<small class="muted">${esc(detail)}</small></span>
+      <button type="button" class="xpbtn small" data-unhide="${kind}" data-value="${esc(value)}">👁 Mostrar</button></div>`;
+  const projects = h.projects.map(cwd => {
+    const p = state.projects.find(q => q.cwd === cwd);
+    return row('📁', p ? p.name : cwd.split(/[\\/]/).filter(Boolean).pop() || cwd, p ? `${cwd} · ${p.sessions.length} sesión${p.sessions.length > 1 ? 'es' : ''}` : `${cwd} · sin sesiones ahora`, 'project', cwd);
+  });
+  const sessions = h.sessions.map(id => {
+    const s = findSession(id);
+    return row('💬', s ? title(s) : 'Sesión que ya no está en ~/.claude', s ? s.project.name : id, 'session', id);
+  });
+  return `<p class="muted">No aparecen en el árbol ni dan avisos. Mostrarlos no cambia nada de la sesión.</p>${projects.join('')}${sessions.join('')}`;
 }
 const SOUND_NAMES = { message: 'Respuesta nueva de Claude', finished: 'Claude terminó', toast: 'Otros avisos (espera, sesión nueva o cerrada)' };
 // Filas de sonido de ⚙ Opciones. list: lo que hay de verdad en disco (null = todavía no se sabe). Nombres escapados: son del usuario.
@@ -1209,6 +1295,9 @@ const toasts = AgentMapToasts.create($('#toasts'), {
 $('#modal').addEventListener('close', () => toasts.pump());
 const sameDir = (a, b) => !!a && !!b && a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
 function relevant(e) {
+  // Ocultos: sin avisos ni sonidos. El motor igual sigue su estado, así que al recuperarlos no llega nada histórico.
+  const hs = findSession(e.sessionId);
+  if (hs && isHidden(hs)) return false;
   for (const [id, at] of closedHere) if (Date.now() - at > 120000) closedHere.delete(id); // marcas viejas: no suprimir de más
   if (e.type === 'session-closed' && closedHere.delete(e.sessionId)) return false;
   const terms = [...state.terms.entries()];

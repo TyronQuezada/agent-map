@@ -30,6 +30,7 @@ Agent Map es una app de escritorio para Windows. Lee las conversaciones que Clau
   🟠 abierta en Agent Map · 🟢 trabajando · 🔵 en espera · ⚪ cerrada.
 - **Buscador** por título, prompt, proyecto, rama o agente, y filtros **Todas / Activas / Hoy / Esta semana**.
 - **Click derecho en una sesión:** cambiarle el nombre, marcarla con uno de 8 colores, **fijarla arriba** o copiar su ID. Tus archivos de Claude no se tocan.
+- **Ocultar** una sesión o un proyecto entero (click derecho → 🙈): sale del árbol y deja de avisar. Se recupera en ⚙ Opciones → Ocultos. **🧹 Borrar datos de Agent Map** quita, tras confirmar, el nombre, color, fijado y no leídos que guardó Agent Map, sin tocar nada de Claude Code.
 
 ![Menú de click derecho con nombre, colores y fijar](docs/screenshots/context-menu.png)
 
