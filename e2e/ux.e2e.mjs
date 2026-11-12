@@ -221,6 +221,7 @@ try {
 
   // Reinicio: preferencias conservadas y nada histórico
   await a.ev(`window.desktop.writeClipboard(${JSON.stringify(clipBefore)}), true`);
+  r.check('CSP: ningún recurso bloqueado en todo lo anterior', a.csp.length === 0, a.csp.join(' | ').slice(0, 300));
   await a.close();
   a = await launch({ profile, env });
   await a.ev(PLAYS);

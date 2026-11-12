@@ -2,11 +2,13 @@
 <html lang="es">
 <head>
   <meta charset="utf-8">
+  <!-- Solo recursos propios (127.0.0.1). Ver test/csp.test.js para el porqué de cada directiva. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Oficina · Agent Map</title>
   <link rel="icon" href="/icon.png">
   <link rel="stylesheet" href="/style.css">
-  <script>try { document.documentElement.dataset.theme = JSON.parse(localStorage.getItem('agentmap.theme')) || 'xp'; } catch { }</script>
+  <script src="/theme-init.js"></script>
 </head>
 <body class="office-page">
   <header class="office-bar">

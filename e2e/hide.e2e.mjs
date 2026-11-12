@@ -94,6 +94,7 @@ try {
     && prefs().hidden.projects.length === 0, keys.join(','));
 
   // 4. Reinicio: lo oculto sigue oculto
+  r.check('CSP: ningún recurso bloqueado en todo lo anterior', a.csp.length === 0, a.csp.join(' | ').slice(0, 300));
   await a.close();
   a = await launch({ profile, env });
   await a.ev('load()');

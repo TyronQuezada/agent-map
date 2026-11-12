@@ -77,7 +77,12 @@ export async function launch({ profile, env, waitReady = true }) {
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
   let id = 0; const pend = new Map();
-  ws.onmessage = m => { const d = JSON.parse(m.data); pend.get(d.id)?.(d); pend.delete(d.id); };
+  const csp = []; // avisos de la Content Security Policy (recursos bloqueados) de esta página
+  ws.onmessage = m => {
+    const d = JSON.parse(m.data);
+    if (d.method === 'Log.entryAdded' && /Content Security Policy/i.test(d.params.entry.text)) csp.push(d.params.entry.text);
+    pend.get(d.id)?.(d); pend.delete(d.id);
+  };
   // Si la app se cierra antes de responder (p. ej. al confirmar el cierre), nada queda esperando para siempre.
   ws.onclose = () => { for (const done of pend.values()) done({ closed: true }); pend.clear(); };
   const send = async (method, params) => {
@@ -94,6 +99,7 @@ export async function launch({ profile, env, waitReady = true }) {
   // La página se comporta como visible y enfocada aunque la ventana esté minimizada o tapada. Si no, Chromium la
   // marca "hidden", deja de pintar y demora eventos como el 'close' del <dialog>: el resultado dependería de la pantalla.
   await send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  await send('Log.enable'); // también entrega los avisos anteriores a la conexión (carga de la página)
   const ev = async expr => {
     const d = await send('Runtime.evaluate', { expression: expr, awaitPromise: true, returnByValue: true, userGesture: true });
     if (d.result?.exceptionDetails) throw new Error(JSON.stringify(d.result.exceptionDetails).slice(0, 500));
@@ -113,7 +119,7 @@ export async function launch({ profile, env, waitReady = true }) {
     ws.close();
     return exited;
   };
-  return { ev, dbg, targets, close, pid: proc.pid, url: page.url, port: Number(new URL(page.url).port), get exited() { return exited; } };
+  return { ev, dbg, targets, close, csp, pid: proc.pid, url: page.url, port: Number(new URL(page.url).port), get exited() { return exited; } };
 }
 
 /** Registro de resultados: check(nombre, ok, detalle); finish() imprime el total y devuelve el código de salida. */
