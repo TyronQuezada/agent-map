@@ -1396,6 +1396,16 @@ document.querySelectorAll('.splitter').forEach(sp => {
 });
 setInterval(() => { $('#clock').textContent = new Date().toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }); }, 1000);
 setInterval(load, 15000);
+// En vivo: el servidor avisa en ~1 s cuando una sesión cambia de estado o se abre/cierra (/api/events) y se recarga
+// en el acto; así "Claude terminó" o "espera permiso" no tardan 15 s ni se pierden en turnos cortos.
+// El intervalo de 15 s queda de respaldo (y para los mensajes nuevos dentro de un turno largo).
+let liveSig = null;
+new EventSource('/api/events').addEventListener('live', e => {
+  if (e.data === liveSig) return; // reconexión sin cambios
+  const first = liveSig === null; // al abrir: la carga inicial ya está en curso
+  liveSig = e.data;
+  if (!first) load();
+});
 
 // ---------- uso del plan en la barra de tareas (y noche en la oficina si se acabaron los tokens) ----------
 let usage = null;

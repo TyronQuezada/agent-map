@@ -45,6 +45,7 @@ Agent Map es una app de escritorio para Windows. Lee las conversaciones que Clau
 ### 🗨 La conversación, lista para leer
 - El panel derecho muestra **tus prompts y las respuestas de Claude** de la sesión elegida como un **chat estilo MSN**: globos con punta, tú a la derecha y Claude a la izquierda.
 - **Avisos de mensajes nuevos como Messenger:** un globito rojo con el número en la sesión, en su proyecto y junto a la conversación. Las respuestas nuevas parpadean 3 veces en celeste y quedan marcadas hasta que las abres.
+- **Avisos en vivo:** cuando Claude termina, espera tu permiso, o una sesión se abre o se cierra, aparece un aviso (con sonido, si lo activas en ⚙ Opciones) en uno o dos segundos, aunque estés en otra sesión.
 - **Click en cualquier mensaje** y se abre completo en un popup.
 - Primer y último prompt resumidos, para saber de qué iba la sesión de un vistazo.
 - Se ocultan los recordatorios internos que agrega Claude Code, las llamadas a herramientas y el razonamiento interno.

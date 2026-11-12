@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
-import { scanAll, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
+import { scanAll, liveSessions, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
 import { readPrefs, updatePrefs, isSoundName } from './lib/prefs.js';
@@ -54,12 +54,46 @@ async function readJson(req) {
   return JSON.parse(body || '{}');
 }
 
+// ---- En vivo: GET /api/events (Server-Sent Events) avisa en ~1 s cuando una sesión de Claude cambia de estado
+// (trabajando, terminó, espera permiso) o se abre o cierra, para que la página recargue sin esperar su intervalo.
+// Solo mira ~/.claude/sessions/*.json (archivos chicos) y solo mientras haya una página conectada.
+export const LIVE_POLL_MS = 1000;
+const liveClients = new Set();
+let liveTimer = null, liveSig = null, livePolling = false;
+// Huella del estado en vivo: cambia con cualquier transición, aunque entre dos lecturas haya pasado por otro estado.
+async function liveSignature() {
+  return [...await liveSessions()].map(([id, l]) => `${id}:${l.pid}:${l.status}:${l.statusUpdatedAt ?? ''}`).sort().join(',');
+}
+const sendLive = (res, sig) => res.write(`event: live\ndata: ${JSON.stringify(sig)}\n\n`);
+async function pollLive() {
+  if (livePolling) return; // una lectura lenta no se superpone con la siguiente
+  livePolling = true;
+  try {
+    const sig = await liveSignature();
+    if (sig !== liveSig) { liveSig = sig; for (const res of liveClients) sendLive(res, sig); }
+  } catch (err) { throttled('live', 'no se pudo leer el estado en vivo: ' + sanitize(err.message)); }
+  finally { livePolling = false; }
+}
+async function openLive(res) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive' });
+  res.write('retry: 3000\n\n'); // si se corta (suspensión, recarga), el navegador reconecta solo
+  liveClients.add(res);
+  res.on('close', () => { // la página se cerró, recargó o perdió la conexión
+    liveClients.delete(res);
+    if (!liveClients.size) { clearInterval(liveTimer); liveTimer = null; liveSig = null; }
+  });
+  if (liveSig === null) liveSig = await liveSignature().catch(() => '');
+  if (!res.destroyed) sendLive(res, liveSig); // estado actual al conectar: la página compara y recarga si cambió
+  if (!liveTimer && liveClients.size) liveTimer = setInterval(pollLive, LIVE_POLL_MS);
+}
+
 // ---- Diagnóstico: errores HTTP y peticiones en curso (método y ruta; nunca query, cuerpo ni cabeceras) ----
 const inflight = new Map(); // "GET /api/tree" -> cantidad en curso
 /** Peticiones atendiéndose ahora mismo, para dar contexto a un aviso de bloqueo del event loop. */
 export const activeRequests = () => [...inflight].map(([k, n]) => n > 1 ? `${k} ×${n}` : k).join(', ');
 const throttled = createThrottle(msg => logger(msg));
 function track(req, res, url) {
+  if (url.pathname === '/api/events') return; // conexión permanente: no es una petición "en curso" para el monitor
   const route = `${req.method} ${sanitize(url.pathname, 80)}`;
   inflight.set(route, (inflight.get(route) || 0) + 1);
   res.on('close', () => {
@@ -82,6 +116,7 @@ const server = http.createServer(async (req, res) => {
   // Contra DNS rebinding: una web ajena que apunte su dominio a 127.0.0.1 llega con otro Host.
   if (!ALLOWED_HOSTS.has(req.headers.host)) { res.writeHead(403); return res.end(); }
   try {
+    if (url.pathname === '/api/events') return await openLive(res);
     if (url.pathname === '/api/usage') {
       // Límites del plan que guarda statusline-tap.js; null si todavía no hay datos.
       let usage = null;

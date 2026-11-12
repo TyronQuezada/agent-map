@@ -81,6 +81,23 @@ try {
   r.check('sesión cerrada: aviso', (await toastsNow()).some(x => x.key === 'session-closed:' + S2.id && /Sesión cerrada/.test(x.text)));
   await clear();
 
+  // En vivo (/api/events): sin llamar a load() desde la prueba, el aviso llega solo en ~1 s.
+  // Se cuentan las recargas pedidas por el canal en vivo (el intervalo de 15 s usa su propia referencia a load).
+  await a.ev(`window.__liveLoads = 0; window.__load = load; window.load = function () { __liveLoads++; return __load(); }; true`);
+  await sleep(GAP);
+  setLive('busy', 4500); await sleep(2500); // la sesión vuelve a estar abierta y trabajando
+  const t0 = Date.now();
+  setLive('idle', 4600);
+  let got = 0;
+  for (let end = Date.now() + 5000; !got && Date.now() < end; await sleep(100)) {
+    if ((await toastsNow()).some(x => x.key === 'finished:' + S2.id)) got = Date.now() - t0;
+  }
+  const liveLoads = await a.ev('__liveLoads');
+  await a.ev('window.load = __load, true');
+  r.check('en vivo: "Claude terminó" aparece solo en segundos, sin esperar la recarga de 15 s', got > 0 && got < 4000 && liveLoads >= 2,
+    `${got ? got + ' ms' : 'no llegó'}, recargas en vivo ${liveLoads}`);
+  await clear();
+
   fs.writeFileSync(NEWF, userLine('hola nueva', S1.cwd) + assistantLine('respuesta nueva', 'msg_new_1'));
   await a.ev('load()');
   t = await toastsNow();
