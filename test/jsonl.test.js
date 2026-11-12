@@ -399,3 +399,95 @@ test('N3: un fallo a mitad de un archivo grande deja huellas coherentes y la sig
   assert.equal(r.reset, false);
   assert.deepEqual(got, Array.from({ length: total }, (_, i) => String(i))); // todo, una vez, en orden
 });
+
+// ---------- líneas que cruzan bloques de 1 MB (los trozos se juntan una sola vez, al llegar su \n) ----------
+const CHUNK = 1 << 20;
+/** Registros que debe dar un archivo completo: cada línea no vacía, parseada (referencia sin bloques). */
+const reference = file => fs.readFileSync(file, 'utf8').split('\n').filter(s => s.trim()).map(s => JSON.parse(s));
+/** Línea de usuario que ocupa exactamente `bytes` bytes, salto incluido. */
+const sized = (bytes, label) => { const base = Buffer.byteLength(line(user(label))); return line(user(label + 'x'.repeat(bytes - base))); };
+/** Lee todo y comprueba registros, offset y huellas contra los bytes del archivo. */
+async function readsLikeReference(file) {
+  const tail = new JsonlTail(file);
+  const got = [];
+  const r = await tail.read(x => got.push(x));
+  const bytes = fs.readFileSync(file);
+  assert.deepEqual(got, reference(file));
+  assert.equal(r.records, got.length);
+  assert.equal(tail.offset, bytes.length);
+  assert.ok(tail.head.equals(bytes.subarray(0, 64)));
+  assert.ok(tail.mark.equals(bytes.subarray(-64)));
+}
+
+test('salto de línea justo antes, en y después del borde de un bloque de 1 MB', async t => {
+  const { name } = tmp(t);
+  for (const first of [CHUNK - 1, CHUNK, CHUNK + 1]) { // la primera línea termina en el byte CHUNK-2, CHUNK-1 o CHUNK
+    const file = name();
+    fs.writeFileSync(file, sized(first, 'a') + line(user('b')) + sized(CHUNK, 'c') + line(user('d')));
+    await readsLikeReference(file);
+  }
+});
+
+test('línea de 3,5 MB: varios bloques seguidos sin salto, entre líneas chicas, sin y con salto final', async t => {
+  const { name } = tmp(t);
+  const big = sized(Math.round(3.5 * CHUNK), 'grande');
+  const a = name(); fs.writeFileSync(a, line(user('antes')) + big + line(user('después')));
+  await readsLikeReference(a);
+  const b = name(); fs.writeFileSync(b, line(user('antes')) + big.slice(0, -1)); // completa pero sin \n final: se toma
+  const tail = new JsonlTail(b);
+  const got = [];
+  assert.equal((await tail.read(x => got.push(x))).records, 2);
+  assert.equal(tail.offset, fs.statSync(b).size);
+  assert.deepEqual(got, reference(b));
+});
+
+test('carácter UTF-8 de 4 bytes partido por el borde de un bloque, dentro de una línea de varios bloques', async t => {
+  const { file } = tmp(t);
+  // Se busca un relleno que deje el borde de 1 MB (y el de 2 MB) a mitad de un 🎮.
+  let text;
+  for (let pad = 0; ; pad++) {
+    text = 'y'.repeat(pad) + '🎮'.repeat(CHUNK / 2); // ~2 MB de emojis: cruza los bordes de 1 y 2 MB
+    const b = Buffer.from(line(user('a')) + line(user(text)));
+    if ((b[CHUNK] & 0xc0) === 0x80 && (b[2 * CHUNK] & 0xc0) === 0x80) break; // byte de continuación
+  }
+  fs.writeFileSync(file, line(user('a')) + line(user(text)) + line(user('z')));
+  await readsLikeReference(file);
+  assert.equal((await texts(file))[1], text);
+});
+
+test('línea grande incompleta: no se entrega mientras crece en varias lecturas y luego sale una sola vez', async t => {
+  const { file } = tmp(t);
+  const full = line(claude('g', 'Ñ'.repeat(1_500_000) + ' fin')); // ~3 MB
+  const bytes = Buffer.from(full);
+  const cuts = [Math.round(1.5 * CHUNK) + 1, Math.round(2.5 * CHUNK) + 1]; // impares: cortes a mitad de una Ñ
+  fs.writeFileSync(file, Buffer.concat([Buffer.from(line(user('hola'))), bytes.subarray(0, cuts[0])]));
+  const tail = new JsonlTail(file);
+  const got = [];
+  assert.equal((await tail.read(x => got.push(x))).records, 1);
+  const start = tail.offset; // queda justo después de la primera línea
+  fs.appendFileSync(file, bytes.subarray(cuts[0], cuts[1]));
+  assert.equal((await tail.read(x => got.push(x))).records, 0);
+  assert.equal(tail.offset, start);
+  fs.appendFileSync(file, Buffer.concat([bytes.subarray(cuts[1]), Buffer.from(line(user('chao')))]));
+  const r = await tail.read(x => got.push(x));
+  assert.equal(r.records, 2);
+  assert.equal(r.reset, false);
+  assert.equal(got[1].message.content[0].text, 'Ñ'.repeat(1_500_000) + ' fin');
+  assert.deepEqual(got, reference(file));
+  await sameAsFull(file);
+});
+
+test('fallo de lectura a mitad de una línea de varios bloques: no se entrega nada a medias y luego sale entera', async t => {
+  const { file } = tmp(t);
+  fs.writeFileSync(file, line(user('antes')) + sized(3 * CHUNK + 10, 'grande') + line(user('después')));
+  let n = 0;
+  interceptReads(t, (r, go) => { if (++n === 3) throw fileError(); return go(); }); // falla el 3.er bloque
+  const tail = new JsonlTail(file);
+  const got = [];
+  await assert.rejects(tail.read(x => got.push(x)), { code: 'EIO' });
+  assert.equal(got.length, 1);
+  const bytes = fs.readFileSync(file);
+  assert.ok(tail.mark.equals(bytes.subarray(tail.offset - 64, tail.offset)));
+  await tail.read(x => got.push(x));
+  assert.deepEqual(got, reference(file));
+});
