@@ -193,26 +193,29 @@ try {
 
   // 5. Bloqueo real y conocido: una sola línea JSONL de 80 MB (JSON.parse no se puede trocear). El monitor debe
   //    registrarlo en el log con su actividad. Es el caso límite del informe E0.2.c (líneas de más de ~30 MB).
-  //    El monitor solo ve la parte del bloqueo que pasa del tick siguiente (hasta 50 ms menos que el real) y agrupa
-  //    los avisos de 10 s: se sale primero de esa ventana y se repite con otra línea si quedó bajo el umbral.
+  //    El monitor solo ve la parte del bloqueo que pasa del tick siguiente (hasta 50 ms menos que el real): solo
+  //    garantiza los bloqueos de más de ~115 ms. Una línea de 80 MB con un solo texto se parsea en ~40 ms y su tramo
+  //    continuo más largo ronda 75 ms, así que el aviso salía o no según dónde cayera el tick (fallaba ~2 de 3).
+  //    Por eso la línea son 80 MB de muchos trozos de texto (como una respuesta enorme partida en partes): su
+  //    JSON.parse tarda ~600 ms, muy por encima de la cota, y el aviso no depende de la fase del temporizador.
+  //    El monitor agrupa los avisos de 10 s: se sale primero de esa ventana. Un solo intento.
   const GIANT_RE = /bloqueado \d+ ms \(proceso browser, pid \d+, en curso: GET \/api\/tree.*\) — terminal .*; gc .*; memoria rss \d+ MB, heap \d+\/\d+ MB, externa \d+ MB$/;
   if (!REAL) {
     const lastAt = () => { const l = lagLines().at(-1); return l ? Date.parse(l.split(' ')[0]) : 0; };
-    const wait = 10_500 - (Date.now() - lastAt());
-    if (wait > 0) await sleep(wait);
+    while (Date.now() - lastAt() < 10_500) await sleep(10_500 - (Date.now() - lastAt()));
     const before = lagLines().length;
     const dir = fs.readdirSync(path.join(big.fx.claude, 'projects')).find(d => d.startsWith('D--Proyectos-perf-'));
-    let seen = false, tries = 0;
-    while (!seen && tries < 4) {
-      tries++;
-      fs.writeFileSync(path.join(big.fx.claude, 'projects', dir, `00000000-0000-4000-8000-00000000000${tries}.jsonl`),
-        userLine('sesión con una línea enorme', 'D:\\Proyectos\\perf') + assistantLine('G'.repeat(80 * 1048576), 'msg_gigante'));
-      const g = JSON.parse(await a.ev(`__probe(async () => (await fetch('/api/tree')).status, 10).then(x => JSON.stringify(x))`));
-      info(`escaneo con una línea de 80 MB (intento ${tries})`, `${Math.round(g.ms)} ms; sonda: peor ${g.max.toFixed(1)} ms; memoria del proceso principal ${workingSetMB(a.pid)} MB`);
-      await sleep(400); // el aviso con actividad se escribe un tick después
-      seen = lagLines().slice(before).some(l => GIANT_RE.test(l));
-    }
-    r.check('el monitor registra el bloqueo de una línea de 80 MB con terminal, GC y memoria', seen, `${tries} intento(s)`);
+    const head = `{"type":"assistant","timestamp":"${new Date().toISOString()}","message":{"id":"msg_gigante","role":"assistant","content":[`;
+    const part = '{"type":"text","text":"g"},';
+    const giant = head + part.repeat(Math.ceil((80 * 1048576 - head.length) / part.length)).slice(0, -1) + ']}}\n';
+    fs.writeFileSync(path.join(big.fx.claude, 'projects', dir, '00000000-0000-4000-8000-000000000001.jsonl'),
+      userLine('sesión con una línea enorme', 'D:\\Proyectos\\perf') + giant);
+    const g = JSON.parse(await a.ev(`__probe(async () => (await fetch('/api/tree')).status, 10).then(x => JSON.stringify(x))`));
+    info('escaneo con una línea de 80 MB', `${Math.round(g.ms)} ms; sonda: peor ${g.max.toFixed(1)} ms; memoria del proceso principal ${workingSetMB(a.pid)} MB`);
+    await sleep(400); // el aviso con actividad se escribe un tick después
+    const fresh = lagLines().slice(before);
+    r.check('el monitor registra el bloqueo de una línea de 80 MB con terminal, GC y memoria', fresh.some(l => GIANT_RE.test(l)),
+      fresh.map(l => l.match(/bloqueado \d+ ms/)?.[0]).join(', ') || 'ningún aviso nuevo');
   }
 
   // 6. Avisos del monitor de bloqueos en esta ejecución.
