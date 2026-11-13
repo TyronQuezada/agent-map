@@ -97,12 +97,17 @@ body.resizing .term, body.resizing iframe { pointer-events: none; }
 .node.project { font-weight: 600; }
 .node.sub { font-size: 12px; }
 .children { margin-left: 16px; }
-.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
-.dot.busy { background: var(--busy); animation: pulse 1.2s infinite; }
+.dot { position: relative; width: 9px; height: 9px; border-radius: 50%; background: var(--off); flex: none; }
+.dot.busy { background: var(--busy); }
+/* Anillo que late: un círculo del mismo verde (al 20 %) que se agranda con transform, sin repintar (box-shadow animado
+   repintaba 60 veces por segundo: ~35 % de un núcleo en reposo). Sobre el punto no se nota: es el mismo color. */
+.dot.busy::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: rgba(35,166,74,.2);
+  opacity: 0; animation: pulse 1.2s infinite; will-change: transform, opacity; pointer-events: none; }
 .dot.idle { background: var(--idle); }
 .dot.here { background: #f0a020; }
 .dot.none { visibility: hidden; } /* mantiene alineados los proyectos sin sesiones activas */
-@keyframes pulse { 50% { box-shadow: 0 0 0 4px rgba(35,166,74,.2); } }
+/* (9 px + 4 px por lado) / 9 px: el mismo anillo de 4 px de antes; aparece y se va como lo hacía el box-shadow */
+@keyframes pulse { 50% { transform: scale(1.889); opacity: 1; } }
 .empty { padding: 16px; color: var(--muted); text-align: center; }
 
 /* Centro */
