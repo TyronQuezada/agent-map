@@ -63,10 +63,12 @@ try {
   const shown = JSON.parse(await a.ev(`JSON.stringify(['message', 'finished', 'toast'].map(k => document.querySelector('[data-snd-file="' + k + '"]').value).concat(!!document.querySelector('.snd-missing')))`));
   r.check('preferencias viejas: cada sonido es uno que existe (el incluido si falta el mp3); nada marcado "(falta)"',
     JSON.stringify(shown) === JSON.stringify([...want, false]), JSON.stringify(shown));
-  const test = async k => { await a.ev(`document.querySelector('[data-snd-test="${k}"]').click(), true`); await sleep(900); return a.ev(`$('#optSndMsg').textContent`); };
+  // Espera a que el mensaje de ese sonido aparezca (con la suite cargada puede tardar más que un tiempo fijo).
+  const test = async k => { await a.ev(`$('#optSndMsg').textContent = '', document.querySelector('[data-snd-test="${k}"]').click(), true`);
+    return (await waitFor(a, `$('#optSndMsg').textContent`, 4000)) || ''; };
   const msgs = [await test('message'), await test('finished'), await test('toast')];
   const plays = JSON.parse(await a.ev('JSON.stringify(__plays)'));
-  r.check('▶ Probar reproduce de verdad los tres sonidos configurados', msgs.every(x => x.startsWith('▶')) && JSON.stringify(plays) === JSON.stringify(want), plays.join(', '));
+  r.check('▶ Probar reproduce de verdad los tres sonidos configurados', msgs.every(x => x.startsWith('▶')) && JSON.stringify(plays) === JSON.stringify(want), plays.join(', ') + ' | ' + msgs.join(' | '));
   r.check('prefs.json no se reescribió por la sustitución', fs.readFileSync(path.join(s1.am, 'prefs.json'), 'utf8') === prefsBefore);
   r.check('CSP: ningún recurso bloqueado', a.csp.length === 0, a.csp.join(' | '));
   await a.close(); a = null;

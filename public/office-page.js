@@ -9,7 +9,8 @@ const portraits = [0, 1, 2].map(i => Office.portrait(i));
 let data = null, writes = {};
 
 // Aquí hay espacio: se ven los globos de todos los que trabajan, no solo al pasar el mouse.
-office.bubbles($('#offWrap'), i => Office.info(data, i, office.night()), () => true);
+office.bubbles($('#offWrap'), i => Office.info(data, i, office.night()), () => true,
+  i => data?.members[i] && channel?.postMessage({ type: 'pick', key: data.members[i].key })); // su historial, en la ventana principal
 office.nightLabel($('#offWrap'));
 
 // Sin tokens (plan al 100 %): luz apagada y cuenta regresiva hasta que se renueven.

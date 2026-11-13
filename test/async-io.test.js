@@ -166,3 +166,51 @@ test('teamStatus: born, mtime e id escritos en un .meta.json no pisan los valore
   assert.equal(art.state, 'idle');
   assert.equal(art.finishedAt, new Date(fs.statSync(r).mtimeMs).toISOString()); // mtime real, no "no-es-fecha"
 });
+
+test('teamStatus: formato actual de Claude Code (sin "finished" mientras trabaja), tarea cortada e historial de tareas', async t => {
+  // Programador: una tarea vieja terminada y otra en curso sin el campo "finished" (así lo escribe Claude Code 2.1).
+  const old = path.join(sub, 'agent-v.meta.json'), cur = path.join(sub, 'agent-n.meta.json');
+  const oldLog = path.join(sub, 'agent-v.jsonl'), curLog = path.join(sub, 'agent-n.jsonl');
+  t.after(() => { for (const f of [old, cur, oldLog, curLog]) fs.rmSync(f, { force: true }); });
+  fs.writeFileSync(old, JSON.stringify({ agentType: 'programador', description: 'menú principal', finished: true }));
+  fs.writeFileSync(oldLog, L(tool('Write', { file_path: path.join(proj, 'menu.gd') })));
+  const past = new Date(Date.now() - 3600_000);
+  fs.utimesSync(old, past, past);
+  fs.writeFileSync(cur, JSON.stringify({ agentType: 'programador', description: 'enemigos' }));
+  fs.writeFileSync(curLog, L(tool('Write', { file_path: path.join(proj, 'enemigo.gd') })));
+  const soon = new Date(Date.now() + 120_000);
+  fs.utimesSync(cur, soon, soon); // la tarea más nueva
+
+  let st = await teamStatus(proj);
+  assert.equal(st.sessionId, SID); // sesión del jefe: la página muestra su conversación en modo equipo
+  const prog = st.members[1];
+  assert.equal(prog.state, 'working', 'sin "finished" y con actividad reciente: trabajando');
+  assert.equal(prog.finishedAt, null);
+  const tasks = prog.feed.filter(f => f.task).map(f => f.text);
+  assert.deepEqual(tasks, ['Tarea: menú principal', 'Tarea: movimiento', 'Tarea: enemigos'], 'historial: sus tareas, de la más vieja a la más nueva');
+  assert.ok(prog.feed.findIndex(f => f.text === 'Escribe menu.gd') < prog.feed.findIndex(f => f.text === 'Tarea: enemigos'));
+  assert.equal(prog.feed.at(-1).th, 'Codeando enemigo.gd');
+  assert.ok(prog.writes >= 2, 'escrituras de todas sus tareas');
+
+  fs.utimesSync(curLog, past, past); // sin escribir en su registro hace una hora: la tarea se cortó
+  st = await teamStatus(proj);
+  assert.equal(st.members[1].state, 'idle');
+
+  // El árbol muestra la tarea sin "finished" como en curso y la terminada como terminada.
+  const subs = (await scanAll())[0].sessions[0].subagents;
+  assert.equal(subs.find(s => s.id === 'agent-n').finished, false);
+  assert.equal(subs.find(s => s.id === 'agent-v').finished, true);
+});
+
+test('teamStatus: con la sesión de la terminal del equipo usa esa como la del jefe, no la más reciente de la carpeta', async () => {
+  const st = await teamStatus(proj, SID);
+  assert.equal(st.sessionId, SID);
+  assert.equal(st.live, true);
+  assert.equal(st.members[0].feed.at(-1).th, 'Encargando a Programador');
+  // Otra sesión de la misma carpeta, todavía sin conversación ni proceso vivo: el jefe de ESA terminal está inactivo.
+  const other = await teamStatus(proj, 'ffffffff-1111-4222-8333-444444444444');
+  assert.equal(other.sessionId, 'ffffffff-1111-4222-8333-444444444444');
+  assert.equal(other.live, false);
+  assert.deepEqual(other.members.map(m => m.state), ['idle', 'idle', 'idle']);
+  assert.deepEqual(other.members[0].feed, []);
+});

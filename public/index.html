@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <!-- Solo recursos propios (127.0.0.1). Ver test/csp.test.js para el porqué de cada directiva. -->
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Agent Map</title>
   <link rel="icon" href="/icon.png">
@@ -81,6 +81,7 @@
     <header class="titlebar">
       <h1 id="modalTitle"></h1>
       <span class="spacer"></span>
+      <button type="button" class="xpbtn small modal-copy" id="modalCopy" data-copy-modal hidden title="Copiar este mensaje completo">📋 Copiar</button>
       <button class="winbtn close" data-close-modal aria-label="Cerrar">×</button>
     </header>
     <div id="modalBody" class="modal-body"></div>

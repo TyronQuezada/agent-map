@@ -72,7 +72,11 @@ const originalTitle = s => s.title || s.aiTitle || s.firstPrompt || s.id.slice(0
 const title = s => lbl(s.id).name || originalTitle(s); // nombre puesto en Agent Map > título de Claude
 const allSessions = () => state.projects.flatMap(p => p.sessions.map(s => ({ ...s, project: p })));
 const findSession = id => allSessions().find(s => s.id === id);
-const openHere = id => state.terms.has(id);
+// Terminal de Agent Map donde corre la sesión `id`: la que se abrió con ese id o una "Nueva" que ya se sabe que es esa.
+const termKeyOf = id => state.terms.has(id) ? id : [...state.terms].find(([, t]) => t.sessionId === id || t.claimed === id)?.[0];
+const openHere = id => !!id && !!termKeyOf(id);
+/** Sesión que corre en una terminal (si ya se sabe). */
+const sessionOfTerm = key => { const t = state.terms.get(key); return t ? t.sessionId || t.claimed || (findSession(key) ? key : null) : null; };
 
 function dotClass(s) {
   if (openHere(s.id)) return 'here';
@@ -620,7 +624,7 @@ function selectSession(id, force = false) {
   state.selected = id; state.selectedSub = null;
   const s = findSession(id);
   if (!s) return;
-  if (openHere(id)) showTerm(id);
+  if (openHere(id)) showTerm(termKeyOf(id));
   else if (s.live && !force) showHome(s);           // ya corre en otra terminal: avisar antes
   else openTerm({ session: id, key: id }, title(s), id);
   renderAll();
@@ -654,6 +658,8 @@ function openTerm(params, label, sessionId, cwd = "") {
       const hello = JSON.parse(ev.data);
       if (hello.key !== key) { state.terms.delete(key); state.terms.set(hello.key, t); if (state.active === key) state.active = hello.key; key = hello.key; }
       t.label = hello.label;
+      if (hello.sessionId && !t.sessionId) t.sessionId = hello.sessionId; // terminal nueva: su sesión, desde el inicio
+      if (state.active === key && t.sessionId) { state.selected = t.sessionId; state.selectedSub = null; }
       renderAll();
       return;
     }
@@ -694,7 +700,10 @@ function showTerm(key) {
   $('#termTitle').textContent = '💻 ' + t.label;
   $('#closeTerm').hidden = false;
   requestAnimationFrame(() => { t.fit.fit(); t.term.focus(); });
-  renderTasks();
+  // El panel derecho sigue a la terminal que miras (antes se quedaba con la sesión elegida antes).
+  const sid = sessionOfTerm(key);
+  if (sid && sid !== state.selected) { state.selected = sid; state.selectedSub = null; renderAll(); }
+  else renderTasks();
   pollTeam();
 }
 
@@ -884,7 +893,8 @@ function officeWrap() { // un solo canvas (con sus globos) que sobrevive a los r
     _officeWrap.appendChild(cv);
     _office = new Office(cv);
     // En pantalla completa se ven los globos de todos; anclada, solo al pasar el mouse.
-    _office.bubbles(_officeWrap, i => Office.info(state.team?.data, i, _office.night()), () => document.fullscreenElement === _officeWrap);
+    _office.bubbles(_officeWrap, i => Office.info(state.team?.data, i, _office.night()), () => document.fullscreenElement === _officeWrap,
+      i => { if (document.fullscreenElement) document.exitFullscreen(); pickMember(state.team?.data.members[i]?.key); });
     _office.nightLabel(_officeWrap);
     _office.setNight(Office.waitUntil(usage));
     const exit = document.createElement('button');
@@ -909,7 +919,10 @@ function setDetached(on) {
 document.addEventListener('keydown', e => { // Esc saca a la oficina de pantalla completa
   if (e.key === 'Escape' && _officeWrap && document.fullscreenElement === _officeWrap) { e.preventDefault(); document.exitFullscreen(); }
 }, true);
-officeChannel?.addEventListener('message', e => { if (e.data?.type === 'closed' || e.data?.type === 'dock') setDetached(false); });
+officeChannel?.addEventListener('message', e => {
+  if (e.data?.type === 'closed' || e.data?.type === 'dock') setDetached(false);
+  if (e.data?.type === 'pick' && typeof e.data.key === 'string') pickMember(e.data.key); // click en alguien en la ventana aparte
+});
 setInterval(() => { if (state.officeDetached && officeWin?.closed) setDetached(false); }, 1000);
 
 $('#stats').addEventListener('click', e => {
@@ -925,20 +938,31 @@ $('#stats').addEventListener('click', e => {
 const teamMiss = new Map(); // carpeta -> cuándo se vio que no tiene equipo (para no preguntar cada 1,5 s)
 let teamWrites = {};
 
+let teamSeq = 0;
+// El equipo se ve mientras su terminal esté abierta, aunque mires otra: primero la carpeta de la terminal activa y
+// después las de las demás terminales abiertas. here = es la terminal que miras (ahí va la oficina del panel derecho).
 async function pollTeam() {
-  const dir = state.terms.get(state.active)?.cwd;
-  if (!dir || (state.team?.dir !== dir && Date.now() - (teamMiss.get(dir) || 0) < 20000)) return setTeam(null);
-  try {
-    const data = await (await fetch('/api/team?dir=' + encodeURIComponent(dir))).json();
-    if (state.terms.get(state.active)?.cwd !== dir) return; // cambió de terminal mientras tanto
-    if (!data) { teamMiss.set(dir, Date.now()); return setTeam(null); }
-    setTeam({ dir, data });
-  } catch { /* servidor ocupado: se reintenta en el próximo ciclo */ }
+  const seq = ++teamSeq;
+  const act = state.terms.get(state.active);
+  const terms = [...state.terms.values()];
+  const dirs = [...new Set([act?.cwd, state.team?.dir, ...terms.map(t => t.cwd)].filter(d => d && terms.some(t => t.cwd === d)))];
+  for (const dir of dirs) {
+    if (state.team?.dir !== dir && Date.now() - (teamMiss.get(dir) || 0) < 20000) continue;
+    const owner = act?.cwd === dir ? act : terms.find(t => t.cwd === dir); // su sesión es la del jefe
+    try {
+      const q = new URLSearchParams({ dir, ...(owner?.sessionId ? { session: owner.sessionId } : {}) });
+      const data = await (await fetch('/api/team?' + q)).json();
+      if (seq !== teamSeq) return; // llegó una consulta más nueva mientras tanto
+      if (data) return setTeam({ dir, data, here: state.terms.get(state.active)?.cwd === dir });
+      teamMiss.set(dir, Date.now());
+    } catch { return; /* servidor ocupado: se reintenta en el próximo ciclo */ }
+  }
+  if (seq === teamSeq) setTeam(null);
 }
 setInterval(pollTeam, 1500);
 
 function setTeam(team) {
-  const before = state.team?.dir;
+  const before = state.team?.dir, beforeHere = state.team?.here;
   state.team = team;
   $('#tabTeam').hidden = !team;
   if (!team) {
@@ -947,7 +971,9 @@ function setTeam(team) {
     return;
   }
   const m = team.data.members;
-  if (team.dir !== before) { teamWrites = {}; state.teamSel = 'boss'; setLeftTab('team'); renderStats(); }
+  // Equipo nuevo: a su pestaña solo si es la terminal que miras (si no, la pestaña queda visible y se elige a mano).
+  if (team.dir !== before) { teamWrites = {}; state.teamSel = 'boss'; if (team.here) setLeftTab('team'); }
+  if (team.dir !== before || team.here !== beforeHere) renderStats(); // la oficina va en el panel derecho solo en su terminal
   officeWrap();
   _office.setWorking(m.map(x => x.state === 'working'));
   m.slice(1).forEach((x, i) => { // escribió un archivo nuevo: a veces va a "imprimirlo"
@@ -994,9 +1020,10 @@ function renderTeam() {
         <span class="member-info"><b>${esc(x.name)}</b><small>${esc(x.role)}</small>
           <span class="member-state" title="${esc(memberState(x, data))}">${esc(memberState(x, data))}</span></span>
       </button>`).join('')}</div>
-    <div class="feed-head">${sel.key === 'boss' ? '🧑‍💼 Actividad del jefe · le escribes en la terminal del centro' : `👀 Lo que hace ${esc(sel.name)} · solo lectura`}</div>
+    <div class="feed-head">${sel.key === 'boss' ? '🧑‍💼 Actividad del jefe · le escribes en la terminal del centro'
+      : `📜 Historial de ${esc(sel.name)} · solo lectura${sel.state === 'working' && !_office?.night() ? ' <span class="live-badge">● en vivo</span>' : ''}`}</div>
     <div id="feed" class="feed" aria-live="polite">${sel.feed.length
-      ? sel.feed.map(f => `<div class="ev"><span class="ev-i">${f.icon}</span><span class="ev-t">${esc(f.text)}</span><small>${clock(f.ts)}</small></div>`).join('')
+      ? sel.feed.map(f => `<div class="ev${f.task ? ' task' : ''}"><span class="ev-i">${f.icon}</span><span class="ev-t">${esc(f.text)}</span><small>${clock(f.ts)}</small></div>`).join('')
       : `<p class="muted">${sel.key === 'boss' ? 'Escríbele al jefe en la terminal del centro: qué quieres hacer.' : 'Todavía no le han encargado nada en esta sesión.'}</p>`}</div>`;
   const feed = $('#feed');
   feed.scrollTop = stick ? feed.scrollHeight : top;
@@ -1007,16 +1034,24 @@ $('#team').addEventListener('click', e => {
   state.teamSel = b.dataset.member;
   renderTeam();
 });
+/** Click en un personaje de la oficina (aquí o en la ventana aparte): su historial en el panel izquierdo, al final. */
+function pickMember(key) {
+  if (!state.team?.data.members.some(x => x.key === key)) return;
+  state.teamSel = key;
+  setLeftTab('team');
+  const feed = $('#feed');
+  if (feed) feed.scrollTop = feed.scrollHeight;
+}
 
 function renderOfficeLegend() {
   const el = $('#officeLegend');
   if (!el || !state.team) return;
   el.innerHTML = state.team.data.members.map((x, i) =>
     `<span><img src="${portraits()[i]}" alt=""> ${esc(x.name)} ${x.state === 'working' && !_office?.night() ? '💻 ' + esc(Office.elapsed(x.since)) : '😴'}</span>`).join('') +
-    '<span class="muted">Pasa el mouse sobre alguien para ver qué hace.</span>';
+    '<span class="muted">Pasa el mouse sobre alguien para ver qué hace · click para ver su historial.</span>';
 }
 function mountOffice() {
-  if (!state.team) return;
+  if (!state.team?.here) return; // en otra terminal el panel derecho es de esa sesión
   const tools = state.officeDetached
     ? '<button class="xpbtn small" data-office="dock" title="Cerrar la ventana aparte y volver a mostrarla aquí">📌 Anclar aquí</button>'
     : `<button class="xpbtn small" data-office="full" title="Ver la oficina en pantalla completa (Esc para volver)">⛶ Pantalla completa</button>
@@ -1140,7 +1175,15 @@ function sum(objs) {
 }
 
 // Panel derecho: la oficina (si la terminal activa tiene equipo) arriba de los datos de la sesión.
-function renderStats() { renderStatsInner(); mountOffice(); }
+// Con la oficina en pantalla completa no se redibuja el panel: sacar el elemento del documento cierra la pantalla
+// completa (pasaba con cada recarga de 15 s). Se redibuja al salir.
+let statsPending = false;
+function renderStats() {
+  if (_officeWrap && document.fullscreenElement === _officeWrap) { statsPending = true; return; }
+  statsPending = false;
+  renderStatsInner(); mountOffice();
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && statsPending) renderStats(); });
 function renderStatsInner() {
   const box = $('#stats');
   const s = state.selected && findSession(state.selected);
@@ -1271,6 +1314,7 @@ function openModal(heading, html, { sticky = false } = {}) {
   const body = $('#modalBody');
   body.onclick = body.onkeydown = body.onchange = null; // quita los handlers del modal anterior (p. ej. el explorador)
   body.innerHTML = html;
+  $('#modalCopy').hidden = true; // solo los modales de un mensaje lo muestran (fullTextHtml)
   m.showModal();
 }
 
@@ -1489,12 +1533,17 @@ document.addEventListener('click', e => {
   const modal = e.target.closest('[data-copy-modal]');
   if (modal) return copyFrom(modal, modalCopyText);
 });
-// Contenido de un modal de mensaje: botón de copiar (ese mensaje y nada más) + el texto completo.
+// Contenido de un modal de mensaje: el texto completo. Su botón de copiar (ese mensaje y nada más) va en la barra de
+// título, junto a ×, para que no se pierda al bajar por un texto largo. Se muestra después de abrir el modal
+// (openModal lo oculta) o, si el texto llega más tarde, apenas se pone.
 const fullTextHtml = text => {
   modalCopyText = text || null;
-  return (text ? '<div class="copy-bar"><button type="button" class="xpbtn small" data-copy-modal title="Copiar este mensaje completo">📋 Copiar</button></div>' : '')
-    + `<div class="prompt-full">${esc(text || '—')}</div>`;
+  queueMicrotask(() => { $('#modalCopy').hidden = !modalCopyText; });
+  return `<div class="prompt-full">${esc(text || '—')}</div>`;
 };
+$('#modal').addEventListener('close', () => { // el evento llega después: si ya se abrió otro modal, no es de este
+  if (!$('#modal').open) { $('#modalCopy').hidden = true; modalCopyText = null; }
+});
 
 // ---------- carga de datos ----------
 let firstLoad = true;

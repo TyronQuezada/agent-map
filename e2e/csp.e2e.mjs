@@ -50,6 +50,12 @@ try {
   const styled = await a.ev(`(() => { const sp = [...document.querySelectorAll('.term .xterm-rows span')].find(s => s.textContent.includes('AGENTMAP-CSP-OK'));
     return !!sp && getComputedStyle(sp).color !== getComputedStyle(sp.parentElement).color; })()`);
   r.check('terminal: xterm dibuja el texto y sus colores', shown && styled, `texto ${shown}, color ${styled}`);
+  // La terminal entera cabe en su recuadro: ni la última fila ni la última columna quedan tapadas por el borde.
+  const fit = JSON.parse(await a.ev(`(() => { const el = state.terms.get(state.active).el, scr = el.querySelector('.xterm-screen');
+    const box = el.getBoundingClientRect(), cs = getComputedStyle(el), r = scr.getBoundingClientRect();
+    const inner = { bottom: box.bottom - parseFloat(cs.borderBottomWidth) - parseFloat(cs.paddingBottom), right: box.right - parseFloat(cs.borderRightWidth) - parseFloat(cs.paddingRight) };
+    return JSON.stringify({ bottom: Math.round(r.bottom - inner.bottom), right: Math.round(r.right - inner.right) }); })()`));
+  r.check('terminal: la última fila y la última columna se ven completas (nada cortado abajo ni a la derecha)', fit.bottom <= 0 && fit.right <= 0, JSON.stringify(fit));
   await a.ev(`closeTerm(state.active), true`).catch(() => {});
   await sleep(300);
   await a.ev(`document.querySelector('#modal').open && document.querySelector('#modal button[value="ok"]')?.click(), true`); // confirmar el cierre
@@ -66,6 +72,11 @@ try {
   const img = await a.ev(`(() => { const i = document.querySelector('#abImg'); return i.complete && i.naturalWidth > 0; })()`);
   r.check('guía: las imágenes de /about/ cargan', img);
   await a.ev(`document.querySelector('#modal').close(), true`);
+  // Retratos del jefe y los agentes (canvas → data:) en "Iniciar con equipo".
+  await a.ev(`showTeamForm(${JSON.stringify(root)}), true`); await sleep(500);
+  const faces = JSON.parse(await a.ev(`JSON.stringify([...document.querySelectorAll('#modal fieldset.tm legend img')].map(i => i.complete && i.naturalWidth > 0))`));
+  r.check('equipo: los retratos del jefe y los 2 agentes se ven', faces.length === 3 && faces.every(Boolean), JSON.stringify(faces));
+  await a.ev(`document.querySelector('#modal').close(), true`);
 
   // Oficina en su ventana: canvas y scripts propios con style-src 'self' (sin 'unsafe-inline')
   await a.ev(`window.open('/office.html?dir=' + encodeURIComponent(${JSON.stringify(root)}), 'agentmap-office'), true`);
@@ -77,6 +88,8 @@ try {
   const off = JSON.parse(await office.ev(`JSON.stringify({ meta: document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content || '',
     office: typeof Office, canvas: document.querySelector('#offCanvas').width > 0, theme: document.documentElement.dataset.theme })`));
   r.check('oficina: su política (sin unsafe-inline) y la oficina dibujada', /style-src 'self';/.test(off.meta) && off.office !== 'undefined' && off.canvas && off.theme === 'xp', JSON.stringify(off));
+  const face = await office.ev(`new Promise(res => { const i = new Image(); i.onload = () => res(i.naturalWidth > 0); i.onerror = () => res(false); i.src = Office.portrait(0); })`);
+  r.check('oficina: los retratos del equipo (data:) cargan', face);
 
   // La política bloquea de verdad
   r.check('sin recursos bloqueados en el uso normal (principal y oficina)', a.csp.length === 0 && office.csp.length === 0, [...a.csp, ...office.csp].join(' | ').slice(0, 300));

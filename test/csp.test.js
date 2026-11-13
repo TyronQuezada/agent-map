@@ -7,7 +7,8 @@
 // - style-src: 'self' en la oficina. En la principal además 'unsafe-inline', imprescindible: xterm 6 (renderer DOM)
 //   crea elementos <style> y escribe atributos style con los colores y medidas de la terminal, y no acepta nonce.
 //   Solo afecta CSS: los scripts siguen sin poder correr en línea.
-// - img-src 'self' (icono y guía), media-src 'self' (sonidos de /sounds/, solo en la principal),
+// - img-src 'self' data: (icono y guía; data: para los retratos del equipo, que se dibujan en un canvas y se usan con
+//   toDataURL: una imagen no ejecuta código), media-src 'self' (sonidos de /sounds/, solo en la principal),
 //   connect-src 'self' (fetch, /api/events y el WebSocket /pty del mismo host y puerto).
 // - base-uri 'none' y form-action 'none': nadie puede cambiar la base de las URLs ni enviar formularios a otro lado
 //   (los formularios de la app son method="dialog" o se manejan con JavaScript).
@@ -26,9 +27,9 @@ const { startServer } = await import('../server.js');
 const PUBLIC = new URL('../public/', import.meta.url);
 const read = f => fs.readFileSync(new URL(f, PUBLIC), 'utf8');
 const EXPECTED = {
-  'index.html': { 'default-src': ["'none'"], 'script-src': ["'self'"], 'style-src': ["'self'", "'unsafe-inline'"], 'img-src': ["'self'"],
+  'index.html': { 'default-src': ["'none'"], 'script-src': ["'self'"], 'style-src': ["'self'", "'unsafe-inline'"], 'img-src': ["'self'", 'data:'],
     'media-src': ["'self'"], 'connect-src': ["'self'"], 'base-uri': ["'none'"], 'form-action': ["'none'"] },
-  'office.html': { 'default-src': ["'none'"], 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'"],
+  'office.html': { 'default-src': ["'none'"], 'script-src': ["'self'"], 'style-src': ["'self'"], 'img-src': ["'self'", 'data:'],
     'connect-src': ["'self'"], 'base-uri': ["'none'"], 'form-action': ["'none'"] },
 };
 const policyOf = html => {
@@ -44,7 +45,9 @@ for (const page of Object.keys(EXPECTED)) {
     const head = html.slice(0, html.indexOf('</head>'));
     const metaAt = head.indexOf('http-equiv="Content-Security-Policy"');
     for (const tag of ['<script', '<link', '<style']) if (head.includes(tag)) assert.ok(metaAt < head.indexOf(tag), `la meta va antes de ${tag}`);
-    assert.ok(!/unsafe-eval|unsafe-hashes|\*|https?:|data:|blob:/.test(JSON.stringify(policyOf(html))), 'sin comodines, otros orígenes ni eval');
+    const { 'img-src': img, ...rest } = policyOf(html);
+    assert.ok(!/unsafe-eval|unsafe-hashes|\*|https?:|data:|blob:/.test(JSON.stringify(rest)), 'sin comodines, otros orígenes ni eval');
+    assert.deepEqual(img, ["'self'", 'data:'], 'data: solo para imágenes (retratos del equipo)');
   });
 
   test(`${page}: sin código en línea (scripts, estilos ni manejadores)`, () => {

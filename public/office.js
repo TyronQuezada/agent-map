@@ -426,24 +426,57 @@
   /**
    * Globos de pensamiento sobre los personajes. info(i) -> { name, text, time, working } | null.
    * always() = true muestra los de todos los que trabajan (ventana aparte o pantalla completa); si no, solo al pasar el mouse.
+   * onPick(i): click en un personaje (ver su historial). Con él, el cursor es una mano y el globo del que señalas trae
+   * "📜 Ver historial": el globo sigue abierto mientras el mouse esté encima y unos instantes al salir del personaje,
+   * para que dé tiempo a llegar al botón.
    */
-  Office.prototype.bubbles = function (wrap, info, always = () => false) {
+  Office.prototype.bubbles = function (wrap, info, always = () => false, onPick = null) {
     const cv = this.canvas;
-    const els = this.chars.map(() => { const d = document.createElement('div'); d.className = 'thought'; d.hidden = true; wrap.appendChild(d); return d; });
-    let hover = -1;
+    const GRACE = 700; // ms que el globo espera al salir del personaje
+    let hover = -1, lastHover = -1, leftAt = 0, overBubble = -1;
+    const els = this.chars.map((_, i) => {
+      const d = document.createElement('div');
+      d.className = 'thought'; d.hidden = true;
+      // Partes fijas: el texto cambia cada segundo (⏱), pero el botón no se recrea (un click a medio camino se perdería).
+      d.innerHTML = '<span class="tt"></span><small class="thought-hint"></small>' + (onPick ? '<button type="button" class="thought-btn">📜 Ver historial</button>' : '');
+      if (onPick) {
+        d.addEventListener('mouseenter', () => { overBubble = i; update(); });
+        d.addEventListener('mouseleave', () => { overBubble = -1; leftAt = Date.now(); update(); });
+        d.querySelector('.thought-btn').addEventListener('click', () => { overBubble = -1; hover = lastHover = -1; onPick(i); update(); });
+      }
+      wrap.appendChild(d);
+      return d;
+    });
     const toCanvas = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * W / r.width, (e.clientY - r.top) * H / r.height]; };
-    cv.addEventListener('mousemove', e => { hover = this.hit(...toCanvas(e)); cv.style.cursor = hover >= 0 ? 'help' : ''; update(); });
-    cv.addEventListener('mouseleave', () => { hover = -1; update(); });
+    const leave = () => { if (hover >= 0) leftAt = Date.now(); hover = -1; };
+    cv.addEventListener('mousemove', e => {
+      const h = this.hit(...toCanvas(e));
+      if (h >= 0) { hover = lastHover = h; } else leave();
+      cv.style.cursor = h >= 0 ? (onPick ? 'pointer' : 'help') : '';
+      update();
+    });
+    cv.addEventListener('mouseleave', () => { leave(); update(); });
+    if (onPick) cv.addEventListener('click', e => { const i = this.hit(...toCanvas(e)); if (i >= 0) onPick(i); });
+    // A quién se señala: el personaje bajo el mouse, el globo bajo el mouse o, por un momento, el último señalado.
+    const pointed = () => hover >= 0 ? hover : overBubble >= 0 ? overBubble : onPick && Date.now() - leftAt < GRACE ? lastHover : -1;
     const update = () => {
       if (!cv.isConnected) return;
-      const r = cv.getBoundingClientRect(), wr = wrap.getBoundingClientRect(), s = r.width / W, all = always();
+      const r = cv.getBoundingClientRect(), wr = wrap.getBoundingClientRect(), s = r.width / W, all = always(), at = pointed();
       this.chars.forEach((c, i) => {
         const inf = info(i), el = els[i];
-        const show = !!inf && (hover === i || (all && inf.working));
+        const show = !!inf && (at === i || (all && inf.working));
         el.hidden = !show;
         if (!show) return;
+        const picking = !!onPick && at === i;
+        el.classList.toggle('pickable', picking);
         const html = `💭 <b>${escHtml(inf.name)}</b> ${escHtml(inf.text)}${inf.time ? ` <small>⏱ ${escHtml(inf.time)}</small>` : ''}`;
-        if (el._html !== html) { el.innerHTML = html; el._html = html; }
+        if (el._html !== html) { el.querySelector('.tt').innerHTML = html; el._html = html; }
+        const hint = picking ? (inf.working ? '● Trabajando en vivo · click para verlo' : 'Click para ver su historial') : '';
+        const h = el.querySelector('.thought-hint');
+        if (h.textContent !== hint) h.textContent = hint;
+        h.hidden = !hint;
+        const btn = el.querySelector('.thought-btn');
+        if (btn) btn.hidden = !picking;
         const p = headTop(c), half = el.offsetWidth / 2;
         const left = Math.max(half + 2, Math.min(wr.width - half - 2, r.left - wr.left + p.x * s)); // sin salirse por los lados
         el.style.left = left + 'px';

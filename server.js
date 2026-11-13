@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 import { scanAll, liveSessions, useHookStates, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
@@ -152,7 +153,7 @@ const server = http.createServer(async (req, res) => {
       // Se consulta cada 1,5 s: sin statSync. Una ruta que no es carpeta o no existe da null igual que antes,
       // porque teamStatus no encuentra el archivo del equipo.
       const dir = url.searchParams.get('dir');
-      return json(res, typeof dir === 'string' && path.isAbsolute(dir) ? await teamStatus(dir) : null);
+      return json(res, typeof dir === 'string' && path.isAbsolute(dir) ? await teamStatus(dir, isUuid(url.searchParams.get('session')) ? url.searchParams.get('session') : null) : null);
     }
     if (url.pathname === '/api/hook') return json(res, await hookDiagnostics()); // diagnóstico: ¿llegan eventos?
     if (url.pathname === '/api/hook/project') {
@@ -314,7 +315,10 @@ async function onTerminal(ws, url) {
       // Cualquier carpeta existente que elija el usuario; el chequeo de Origin del upgrade impide que la mande otra web.
       if (!isDir(newCwd)) { ws.close(4004, 'Carpeta no encontrada'); return; }
       const cwd = path.resolve(newCwd);
-      opts = { key: 'new-' + Date.now(), label: 'Nueva · ' + (path.basename(cwd) || cwd), sessionId: null, cwd, args: [] };
+      // Con su propio id desde el inicio: la terminal sabe qué sesión es la suya (antes se adivinaba por carpeta y hora,
+      // y con varias sesiones en la misma carpeta las conversaciones se cruzaban).
+      const sid = randomUUID();
+      opts = { key: 'new-' + Date.now(), label: 'Nueva · ' + (path.basename(cwd) || cwd), sessionId: sid, cwd, args: ['--session-id', sid] };
     } else { ws.close(4000, 'Falta parámetro'); return; }
     // Sin `claude` en el PATH, cmd.exe solo diría "no se reconoce como un comando": la página explica cómo resolverlo.
     if (!findClaude()) { ws.close(4005, 'Claude Code no está instalado o no está en el PATH'); return; }
@@ -323,7 +327,7 @@ async function onTerminal(ws, url) {
   }
 
   t.sockets.add(ws);
-  ws.send(JSON.stringify({ t: 'hello', key: t.key, label: t.label }));
+  ws.send(JSON.stringify({ t: 'hello', key: t.key, label: t.label, sessionId: t.sessionId }));
   if (t.buffer.length) ws.send(t.buffer.toString());
   ws.on('message', raw => {
     let m;

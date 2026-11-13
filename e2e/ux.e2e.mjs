@@ -205,6 +205,13 @@ try {
   st = await clickCopy('[data-copy-modal]');
   clip = await clipboard();
   r.check('modal de una respuesta: su botón copia esa respuesta completa y confirma', clip === LONG20 && st.text === '✓ Copiado', st.text);
+  // El botón va en la barra de título, junto a ×: sigue a la vista después de bajar hasta el final del texto largo.
+  const pos = JSON.parse(await a.ev(`(() => { const b = $('#modalBody'); b.scrollTop = b.scrollHeight; const btn = $('#modalCopy'), x = $('#modal [data-close-modal]');
+    const r1 = btn.getBoundingClientRect(), r2 = $('#modal').getBoundingClientRect(), rx = x.getBoundingClientRect();
+    return JSON.stringify({ inBar: !!btn.closest('.titlebar'), next: btn.nextElementSibling === x, visible: !btn.hidden && r1.top >= r2.top && r1.bottom <= r2.bottom && r1.width > 0,
+      sameRow: Math.abs(r1.top + r1.height / 2 - (rx.top + rx.height / 2)) < 6, scrolled: b.scrollTop > 0, inBody: !!$('#modalBody [data-copy-modal]') }); })()`));
+  r.check('el botón de copiar está junto a × en la barra de título y sigue a la vista al bajar por el texto',
+    pos.inBar && pos.next && pos.visible && pos.sameRow && pos.scrolled && !pos.inBody, JSON.stringify(pos));
   await closeModal();
   await a.ev(`renderStats(), document.querySelector('[data-prompt="last"]').click(), true`); await sleep(600);
   st = await clickCopy('[data-copy-modal]');
@@ -214,6 +221,8 @@ try {
   st = await clickCopy('[data-copy-modal]');
   const modalFail = st.text === '⚠ No se pudo copiar' && /copy-failed/.test(st.cls);
   await closeModal(); await clear();
+  r.check('otros modales no muestran el botón de copiar', await a.ev(`(showOptions(), $('#modalCopy').hidden)`));
+  await closeModal();
   await a.ev('renderStats(), true');
   st = await clickCopy(`[data-copy-msg="${iu}"]`); await sleep(200);
   r.check('si el portapapeles falla: se marca el botón y aparece un aviso de error', modalFail && st.text === '⚠' && /copy-failed/.test(st.cls)
