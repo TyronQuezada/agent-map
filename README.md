@@ -61,7 +61,9 @@ Agent Map responde todo eso en una sola pantalla:
 
 ### 💻 Terminales dentro de la app
 - Click en una sesión y se retoma con `claude --resume`; **＋ Iniciar Claude** abre una sesión nueva en la carpeta que elijas (el explorador también crea carpetas).
-- Las terminales siguen vivas al cambiar de sesión y se encuentran en la **barra de tareas** de abajo.
+- Cada sesión nueva arranca con su **propio id** (`claude --session-id`): Agent Map sabe desde el primer momento qué conversación es de cada terminal, aunque abras varias en la misma carpeta, y nunca las mezcla.
+- Las terminales siguen vivas al cambiar de sesión y se encuentran en la **barra de tareas** de abajo: click en una la vuelve a mostrar y el panel derecho pasa a la conversación de esa sesión.
+- La terminal ocupa todo su recuadro sin cortar la última fila ni la última columna.
 - **Copiar y pegar** como en Windows Terminal: Ctrl+V pega (o le pasa una imagen a Claude), Ctrl+C copia la selección, el click derecho copia o pega.
 - Si una sesión ya está abierta en otra terminal, Agent Map avisa antes de abrirla otra vez.
 - Al cerrar una terminal se detiene Claude **y todo lo que lanzó** (servidores MCP, comandos). La conversación queda guardada.
@@ -70,7 +72,7 @@ Agent Map responde todo eso en una sola pantalla:
 
 ### 🗨 Conversación y avisos
 - El panel derecho muestra **tus prompts y las respuestas de Claude** como un chat: tú a la derecha, Claude a la izquierda. Click en un mensaje lo abre completo.
-- Cada mensaje tiene su botón **📋** que copia ese mensaje completo, con su formato original.
+- Cada mensaje tiene su botón **📋** que copia ese mensaje completo, con su formato original. En la ventana de un mensaje, **📋 Copiar** está en la barra de título junto a ×, así que sigue a la vista aunque bajes por un texto largo.
 - **Mensajes nuevos:** un globito rojo con el número en la sesión, en su proyecto y junto a la conversación; las respuestas nuevas parpadean y quedan marcadas hasta que las abres.
 - **Avisos en vivo** cuando Claude responde, termina o espera tu intervención, y cuando una sesión se abre o se cierra, aunque estés en otra sesión. Se ven hasta 3 a la vez (el resto espera su turno); click en un aviso abre su sesión.
 
@@ -101,7 +103,10 @@ Agent Map responde todo eso en una sola pantalla:
 ### 👥 Equipo de agentes con oficina pixel art
 - **👥 Iniciar con equipo:** un jefe y 2 agentes con nombre, cargo e instrucciones, a partir de 8 plantillas (videojuego, web, ingeniería inversa, migración de código, investigación y redacción, análisis de datos, revisión de seguridad o en blanco).
 - Usa piezas normales de Claude Code: `CLAUDE.md`, subagentes en `.claude/agents/` y una pizarra `TAREAS.md` en la carpeta que elijas.
-- Una **oficina pixel art** refleja el estado real del equipo; se puede separar a otra ventana o monitor.
+- La pestaña **👥 Equipo** (arriba a la izquierda, junto a Proyectos) muestra las fichas del jefe y los agentes, con sus retratos, y se ve mientras la terminal del equipo esté abierta, aunque mires otra sesión.
+- Cada agente guarda su **historial**: sus últimas tareas ("📌 Tarea: …", el encargo del jefe) y lo que hizo en cada una, paso a paso; si está trabajando dice **● en vivo** y se actualiza solo.
+- Una **oficina pixel art** refleja el estado real del equipo: quien trabaja teclea, quien no tiene tareas duerme. Al pasar el mouse sobre alguien, su globo dice qué hace; **click en el personaje** o en **📜 Ver historial** del globo abre su historial.
+- En la terminal del equipo, el panel derecho muestra la oficina y debajo la conversación con el jefe. La oficina se puede poner en pantalla completa o separar a otra ventana o monitor.
 
 ![Equipo trabajando: fichas, terminal del jefe y oficina](docs/screenshots/team.png)
 
@@ -126,7 +131,9 @@ Desde la versión 0.8.0 (detalle en el [CHANGELOG](CHANGELOG.md)):
 - **Primera ejecución clara:** detecta si falta Claude Code o su carpeta y explica cómo resolverlo; los errores al retomar una sesión (por ejemplo, carpeta borrada) se explican en la terminal.
 - **Rendimiento:** lectura incremental de las sesiones, escaneos asíncronos, búfer de terminal por trozos, lectura sin copias repetidas de líneas JSONL gigantes y un indicador de actividad que ya no repinta la ventana 60 veces por segundo.
 - **Robustez y seguridad:** lector JSONL endurecido, puerto fijo con respaldo, *Content Security Policy* en las páginas, monitor de bloqueos y registro de errores.
-- **Calidad:** 148 pruebas unitarias y 9 suites E2E que abren la app real (también empaquetada).
+- **Modo equipo:** retratos visibles, agentes que aparecen trabajando con el formato actual de Claude Code, historial por agente con acceso desde la oficina, pestaña Equipo siempre visible con el equipo abierto, conversación del jefe en el panel y pantalla completa de la oficina que ya no se cierra sola.
+- **Sesiones y terminales:** cada sesión nueva con su propio id (conversaciones que no se cruzan), barra de tareas y árbol que van a la terminal correcta, terminal sin la última fila cortada y botón de copiar fijo en la ventana de un mensaje.
+- **Calidad:** 150 pruebas unitarias y 10 suites E2E que abren la app real (también empaquetada). Qué comprueba cada una, en [Cómo se prueba](#cómo-se-prueba).
 
 ---
 
@@ -180,7 +187,7 @@ Fuera de esa carpeta solo escribe cuando tú lo pides: el hook en `<proyecto>/.c
 
 **Cómo se protege:**
 - El servidor escucha solo en `127.0.0.1` y rechaza peticiones con `Host` u `Origin` ajenos (DNS rebinding y otras webs). Abrir terminales y escribir preferencias exige que la petición venga de la propia app.
-- La interfaz corre con `contextIsolation` y `sandbox`, sin acceso a Node, y con una *Content Security Policy* que solo permite recursos propios.
+- La interfaz corre con `contextIsolation` y `sandbox`, sin acceso a Node, y con una *Content Security Policy* que solo permite recursos del propio servidor local (más las imágenes que la app dibuja, como los retratos del equipo).
 - Los links externos se abren en tu navegador, nunca dentro de la app.
 
 ---
@@ -214,7 +221,27 @@ node scripts/make-sounds.js   # regenera los sonidos incluidos (assets/sounds)
 
 Sin frameworks en la interfaz: HTML, CSS y JavaScript con `innerHTML` y delegación de eventos. Dependencias de ejecución: `node-pty`, `@xterm/xterm`, `@xterm/addon-fit` y `ws`.
 
-**Pruebas.** `test/` cubre lector JSONL, escaneo, preferencias, sonidos, hook, eventos, estado en vivo, CSP, búfer de terminal, diagnóstico y detección de Claude Code. `e2e/` abre Agent Map de verdad con datos de prueba aislados y lo controla por DevTools: primera ejecución, avisos y sonidos, ocultar, hook, CSP, rendimiento con 100 MB de sesiones, puerto fijo y respaldo. Nunca usan tu `~/.claude` ni el `claude` real.
+### Cómo se prueba
+
+Cada prueba imprime una línea por comprobación: **OK** si se cumple y **FAIL** con el detalle si no; al final, el total (por ejemplo `17/17 OK`). Ninguna usa tu `~/.claude` ni el `claude` real: crean datos de prueba en carpetas temporales y un `claude` falso.
+
+- **`npm test`** (unitarias e integración, `test/`): lector JSONL (líneas incompletas, gigantes, UTF-8 partido, archivos reemplazados), escaneo y equipo, preferencias, sonidos, hook, eventos, estado en vivo, CSP, búfer de terminal, monitor de bloqueos y detección de Claude Code.
+- **`npm run test:e2e`** abre Agent Map de verdad y lo maneja por DevTools. Una suite por archivo de `e2e/`:
+
+| Suite | Qué comprueba |
+|---|---|
+| `csp` | la *Content Security Policy*: todo carga (terminal, sonidos, guía, retratos del equipo, oficina) y bloquea scripts en línea y `eval`; la terminal no queda cortada |
+| `firstrun` | primera ejecución: sin Claude Code, sin sesiones, error de lectura, sonidos incluidos y carpeta de sesión borrada |
+| `hide` | ocultar y recuperar sesiones y proyectos, y borrar los datos de Agent Map sin tocar Claude Code |
+| `hook` | instalar y quitar el hook en un proyecto, eventos en vivo y diagnóstico |
+| `load-seq` | una respuesta vieja del servidor no pisa a una más nueva |
+| `perf` | rendimiento con 100 MB de sesiones, ráfagas de terminal y el monitor de bloqueos |
+| `port` | puerto fijo 47317 y respaldo si está ocupado (se omite, sin fallar, si tu Agent Map está abierto) |
+| `sounds` | los cuatro mp3 del instalador local (se omite si no están) |
+| `team` | modo equipo: sesión propia por terminal, pestaña Equipo, barra de tareas, historial desde la oficina y pantalla completa |
+| `ux` | avisos, sonidos y copiar mensajes (también el botón de copiar en la ventana de un mensaje) |
+
+Con `AGENT_MAP_EXE=<ruta al .exe>` las mismas suites prueban la app empaquetada.
 
 | Ruta | Qué hace |
 |---|---|

@@ -107,7 +107,9 @@ El menú también se usa con el teclado: ↑ ↓ para moverse, Enter para elegir
 ### Terminales
 
 - Son terminales reales con Claude Code.
-- Siguen vivas al cambiar de sesión: las encuentras abajo, en la **barra de tareas**.
+- Siguen vivas al cambiar de sesión: las encuentras abajo, en la **barra de tareas**; click en una la vuelve a mostrar, y el panel derecho pasa a la conversación de esa sesión.
+- Cada sesión nueva (＋ Iniciar Claude o equipo) arranca con su propio id (`claude --session-id`): Agent Map sabe desde el principio qué conversación es de cada terminal, aunque haya varias en la misma carpeta.
+- La terminal ocupa todo su recuadro: se ven completas la última fila y la última columna.
 - **Copiar y pegar** como en Windows Terminal:
   - **Ctrl+V** (o Ctrl+Shift+V) pega el texto del portapapeles. Si el portapapeles no tiene texto (por ejemplo, una captura), se manda Ctrl+V a Claude para que pegue la imagen.
   - **Ctrl+C** con texto seleccionado lo copia; sin selección, interrumpe a Claude como siempre.
@@ -152,14 +154,14 @@ Plantillas (todas pensadas para que los 2 agentes puedan avanzar a la vez sin pi
 Si ya tienes un agente propio con el mismo nombre, Agent Map no lo pisa: te pide otro nombre.
 
 **Mientras trabajan**
-- **Panel izquierdo → 👥 Equipo:** las 3 fichas con su estado ("💻 Edita player.gd", "😴 Terminó hace 2 min"). Click en una ficha muestra **lo que está haciendo**, paso a paso. Es **solo lectura**: a los agentes no se les interrumpe; si quieres cambiar algo, díselo al jefe.
-- **Centro:** una sola terminal, la del jefe. Ahí escribes.
-- **Panel derecho → 🏢 Oficina:** la oficina en pixel art.
+- **Panel izquierdo → 👥 Equipo:** las 3 fichas con su estado ("💻 Edita player.gd", "😴 Terminó hace 2 min"). Click en una ficha muestra su **historial**: sus últimas tareas de esta sesión (cada una empieza con "📌 Tarea: …", el encargo del jefe) y, debajo, lo que hizo paso a paso. Si está trabajando dice **● en vivo** y se va actualizando. Es **solo lectura**: a los agentes no se les interrumpe; si quieres cambiar algo, díselo al jefe.
+- **Centro:** una sola terminal, la del jefe. Ahí escribes. La pestaña 👥 Equipo se ve mientras la terminal del equipo esté abierta, aunque estés mirando otra sesión; la oficina del panel derecho aparece al volver a la terminal del equipo (o al elegir la sesión del jefe en el árbol).
+- **Panel derecho → 🏢 Oficina y conversación:** la oficina en pixel art y, debajo, la conversación con el jefe, como en cualquier sesión.
   - Sin trabajo, los 3 duermen (zzz): el jefe en su sillón y los agentes en su escritorio.
   - Cuando el jefe trabaja, va a su escritorio; cuando le encarga algo a un agente, ese agente despierta y se pone a teclear (su monitor se enciende).
   - A veces se levantan a la **impresora** (más seguido cuando acaban de escribir un archivo) o a la **máquina de café**. Eso es decorativo.
   - Mientras trabajan teclean, hacen pausas, miran a un lado o se estiran, y tienen un globito "…" sobre la cabeza. Durmiendo, respiran.
-  - **Pasa el mouse sobre alguien** y aparece su pensamiento con lo que hace en pocas palabras y cuánto lleva: "💭 Programador Codeando player.gd ⏱ 2:15", "💭 Artista Dibujando un sprite", "💭 Jefe Supervisando a Programador y Artista". El mismo resumen y el tiempo aparecen en las fichas de la izquierda y bajo la oficina.
+  - **Pasa el mouse sobre alguien** y aparece su pensamiento con lo que hace en pocas palabras y cuánto lleva: "💭 Programador Codeando player.gd ⏱ 2:15", "💭 Artista Dibujando un sprite", "💭 Jefe Supervisando a Programador y Artista". El mismo resumen y el tiempo aparecen en las fichas de la izquierda y bajo la oficina. Sobre alguien el cursor es una mano: **click** en el personaje, o en **📜 Ver historial** dentro de su globo, abre su historial en el panel izquierdo (también desde la ventana aparte). El globo espera un momento al salir del personaje para que alcances el botón.
   - **⛶ Pantalla completa:** la oficina ocupa toda la pantalla y muestra los globos de todos. Esc (o "✕ Salir") vuelve al panel.
   - **⧉ Separar:** abre la oficina en su propia ventana, que puedes llevar a otro monitor y poner en pantalla completa (F11 o su botón ⛶). **📌 Anclar** (en esa ventana o en el panel) la devuelve al panel; cerrar esa ventana hace lo mismo.
   - También puedes arrastrar el divisor del panel derecho para verla más grande.
@@ -180,7 +182,7 @@ Cada sección se **pliega o despliega** con un click en su título (botón ▲/�
 - **💬 Qué pasó:** primer y último prompt resumidos en 4 líneas. **Click** abre el texto completo en una ventana. Se quitan los recordatorios internos que agrega Claude Code.
 - **🗨 Conversación (estilo MSN):** globos redondeados con punta: tú a la derecha (azul, "Tú dice:") y Claude a la izquierda (blanco, "Claude dice:"), en orden y resumidos en 3 líneas. Al abrir una sesión se ve lo más reciente abajo. **Click** en un mensaje abre el texto completo en un popup. Solo muestra texto: no las llamadas a herramientas, el razonamiento interno ni lo que hicieron los subagentes.
 - **🔴 Mensajes nuevos, como en Messenger:** cuando Claude responde algo que todavía no abriste aparece un globito rojo con el número: en la sesión y en la carpeta del proyecto (izquierda) y junto a "Conversación (N) +2" (derecha). Cada respuesta nueva llega en celeste, **parpadea 3 veces** y queda marcada con "NUEVO". Click en el globito rojo te lleva a la primera; **abrir una respuesta nueva la da por leída** (y las anteriores). Tus propios mensajes no cuentan. Se recuerda entre aperturas de la app: si Claude respondió con Agent Map cerrado, lo ves al abrir.
-- **📋 Copiar un mensaje:** cada globo tiene su botón 📋, que copia ese mensaje completo y con su formato original (aunque en pantalla se vea recortado). Confirma con ✓ junto al botón; si el portapapeles falla, lo avisa.
+- **📋 Copiar un mensaje:** cada globo tiene su botón 📋, que copia ese mensaje completo y con su formato original (aunque en pantalla se vea recortado). Al abrir un mensaje (o el primer o último prompt) en su ventana, **📋 Copiar** está en la barra de título, junto a ×: sigue a la vista aunque bajes hasta el final. Confirma con ✓ junto al botón; si el portapapeles falla, lo avisa.
 - **🔔 Avisos en vivo:** cuando Claude responde, termina o espera tu intervención, y cuando una sesión se abre o se cierra, aparece un aviso abajo a la derecha en uno o dos segundos, aunque estés mirando otra sesión. Se ven hasta 3 a la vez y el resto espera su turno; se cierran solos y **click en un aviso abre su sesión**. Si hay un popup abierto, esperan a que lo cierres. Al abrir la app no se avisa nada de lo que pasó antes, y las sesiones o proyectos ocultos no avisan. Cada aviso puede sonar (ver ⚙ Opciones → Sonidos).
 - **🤖 Agentes usados:** cada agente es un link `↗`:
   - agentes de plugins (`plugin:agente`) → repositorio de GitHub del plugin;
@@ -254,7 +256,7 @@ Sin el hook, Agent Map deduce el estado de cada sesión de `~/.claude/sessions/*
 - Abrir terminales y crear carpetas exige que la petición venga de la propia app (`Origin`).
 - Los links externos se abren en tu navegador, nunca dentro de la app.
 - La página no tiene acceso a Node: solo a los botones de ventana (`contextIsolation`, `sandbox`).
-- Las páginas tienen una *Content Security Policy*: solo cargan scripts, imágenes, sonidos y conexiones del propio servidor local.
+- Las páginas tienen una *Content Security Policy*: solo cargan scripts, imágenes, sonidos y conexiones del propio servidor local, más las imágenes que la app dibuja en el momento (los retratos del equipo, como `data:`). Ningún script puede venir de otro lado ni ejecutarse en línea.
 
 ---
 
