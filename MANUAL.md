@@ -27,6 +27,7 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
 
 **Configuración → Aplicaciones → Agent Map → Desinstalar.** Tus sesiones de Claude no se tocan. Si quieres borrar todo rastro:
 
+- **Antes de desinstalar**, quita el hook de cada proyecto donde lo instalaste (click derecho en el proyecto → 🪝 Hook de Claude Code… → **Quitar el hook**). Si borras `.agent-map` sin quitarlo, Claude Code seguirá intentando ejecutar un script que ya no existe.
 - Borra la carpeta `C:\Users\<tú>\.agent-map`.
 - Quita el prefijo `node "C:\Users\<tú>\.agent-map\statusline-tap.mjs" ` de la línea `statusLine` en `~/.claude/settings.json` (ver sección 6).
 
@@ -53,6 +54,7 @@ Agent Map es una aplicación de escritorio para Windows (estilo Windows XP) que 
   - **Tema:** Windows XP, **Matrix** (letras verdes sobre negro, también en la terminal) o **Noche** (oscuro azulado). Los tres mantienen los 3 paneles y la barra de tareas.
   - **Tamaño de letra** de la terminal.
   - **Abrir en pantalla completa** sí o no.
+  - **Sonidos:** volumen y un sonido para cada aviso (respuesta nueva, Claude terminó, otros avisos), con **▶ Probar**. La app trae tres sonidos propios (`agentmap-mensaje.wav`, `agentmap-fin.wav`, `agentmap-aviso.wav`) que suenan desde la instalación. Para usar los tuyos, copia archivos mp3, wav u ogg a `~/.agent-map/sounds` (botón **📂 Abrir carpeta de sonidos**) y elígelos en la lista.
   - **📖 Cómo funciona Agent Map:** una guía de 10 diapositivas con capturas, como la intro de un videojuego. Avanza con ◀ ▶ o las flechas del teclado; click en el texto lo muestra completo.
 - **Ancho de los paneles:** pasa el mouse por la línea que separa dos paneles (el cursor cambia a ↔), mantén apretado y arrastra. La terminal se reacomoda en vivo mientras arrastras. Doble click en la línea vuelve al ancho original. También se mueve con las flechas ← → si la línea tiene el foco. Agent Map recuerda el ancho la próxima vez.
 
@@ -178,6 +180,8 @@ Cada sección se **pliega o despliega** con un click en su título (botón ▲/�
 - **💬 Qué pasó:** primer y último prompt resumidos en 4 líneas. **Click** abre el texto completo en una ventana. Se quitan los recordatorios internos que agrega Claude Code.
 - **🗨 Conversación (estilo MSN):** globos redondeados con punta: tú a la derecha (azul, "Tú dice:") y Claude a la izquierda (blanco, "Claude dice:"), en orden y resumidos en 3 líneas. Al abrir una sesión se ve lo más reciente abajo. **Click** en un mensaje abre el texto completo en un popup. Solo muestra texto: no las llamadas a herramientas, el razonamiento interno ni lo que hicieron los subagentes.
 - **🔴 Mensajes nuevos, como en Messenger:** cuando Claude responde algo que todavía no abriste aparece un globito rojo con el número: en la sesión y en la carpeta del proyecto (izquierda) y junto a "Conversación (N) +2" (derecha). Cada respuesta nueva llega en celeste, **parpadea 3 veces** y queda marcada con "NUEVO". Click en el globito rojo te lleva a la primera; **abrir una respuesta nueva la da por leída** (y las anteriores). Tus propios mensajes no cuentan. Se recuerda entre aperturas de la app: si Claude respondió con Agent Map cerrado, lo ves al abrir.
+- **📋 Copiar un mensaje:** cada globo tiene su botón 📋, que copia ese mensaje completo y con su formato original (aunque en pantalla se vea recortado). Confirma con ✓ junto al botón; si el portapapeles falla, lo avisa.
+- **🔔 Avisos en vivo:** cuando Claude responde, termina o espera tu intervención, y cuando una sesión se abre o se cierra, aparece un aviso abajo a la derecha en uno o dos segundos, aunque estés mirando otra sesión. Se ven hasta 3 a la vez y el resto espera su turno; se cierran solos y **click en un aviso abre su sesión**. Si hay un popup abierto, esperan a que lo cierres. Al abrir la app no se avisa nada de lo que pasó antes, y las sesiones o proyectos ocultos no avisan. Cada aviso puede sonar (ver ⚙ Opciones → Sonidos).
 - **🤖 Agentes usados:** cada agente es un link `↗`:
   - agentes de plugins (`plugin:agente`) → repositorio de GitHub del plugin;
   - agentes integrados (`Explore`, `Plan`, `general-purpose`, `web-fetch`…) → documentación oficial de subagentes.
@@ -219,15 +223,17 @@ El nombre del plan se lee de `~/.claude.json` (datos de la cuenta). Agent Map **
 
 ## 7. Cómo funciona por dentro
 
-- **Electron:** la app lleva su propio motor y arranca internamente un servidor en `127.0.0.1` con un **puerto al azar**. No tienes que abrir el navegador ni ejecutar comandos: el servidor nace y muere con la ventana.
-- **Datos:** lee `~/.claude/projects/**/*.jsonl` y `~/.claude/sessions/*.json` **solo en modo lectura**. La lista de proyectos sale del `cwd` guardado en cada sesión.
+- **Electron:** la app lleva su propio motor y arranca internamente un servidor en `127.0.0.1`, en el **puerto 47317** (así la ventana conserva sus preferencias entre reinicios). Si ese puerto está ocupado usa uno libre y lo anota en el log; en ese arranque no se recuerdan paneles ni secciones plegadas. No tienes que abrir el navegador ni ejecutar comandos: el servidor nace y muere con la ventana.
+- **Datos:** lee `~/.claude/projects/**/*.jsonl` y `~/.claude/sessions/*.json` **solo en modo lectura**. La lista de proyectos sale del `cwd` guardado en cada sesión. La lectura es incremental: después de la primera vez solo se procesan las líneas nuevas de cada sesión.
+- **En vivo:** mientras la ventana está abierta, el servidor mira el estado de las sesiones cada segundo y avisa a la página por *server-sent events* solo cuando algo cambia. Además, la página recarga todo cada 15 s.
 - **Terminales:** `node-pty` (ConPTY de Windows) ejecuta `claude --resume <id>` o `claude` en la carpeta elegida.
 - **Archivos propios:** todo lo que escribe Agent Map va a `C:\Users\<tú>\.agent-map\`:
   - `usage.json`: último uso del plan;
   - `prefs.json`: tema, letra, pantalla completa y los nombres, colores y fijados de tus sesiones;
   - `statusline-tap.mjs`: copia del intermediario de la statusline;
   - `agentmap-hook.mjs` y `events/`: el hook oficial de Claude Code y sus registros (ver abajo);
-  - `agent-map.log`: registro de arranque, cierre y errores.
+  - `sounds/`: tus sonidos propios (los tres predeterminados vienen dentro de la app);
+  - `agent-map.log`: registro de arranque, cierre, errores y avisos del monitor de bloqueos (cuánto se trabó la app y qué hacía: solo duraciones y contadores, nunca contenido).
 
 ### 🪝 Hook de Claude Code (opcional, por proyecto)
 
@@ -248,6 +254,7 @@ Sin el hook, Agent Map deduce el estado de cada sesión de `~/.claude/sessions/*
 - Abrir terminales y crear carpetas exige que la petición venga de la propia app (`Origin`).
 - Los links externos se abren en tu navegador, nunca dentro de la app.
 - La página no tiene acceso a Node: solo a los botones de ventana (`contextIsolation`, `sandbox`).
+- Las páginas tienen una *Content Security Policy*: solo cargan scripts, imágenes, sonidos y conexiones del propio servidor local.
 
 ---
 
@@ -257,29 +264,43 @@ Sin el hook, Agent Map deduce el estado de cada sesión de `~/.claude/sessions/*
 npm install        # dependencias
 npm start          # app de escritorio en modo desarrollo
 npm run web        # modo navegador en http://localhost:4317 (PORT para cambiarlo)
-npm test           # pruebas
+npm test           # pruebas unitarias e integración
+npm run test:e2e   # E2E con la app real (AGENT_MAP_EXE=<ruta al .exe> prueba la empaquetada)
 npm run dist       # genera el icono y el instalador en dist/
+node scripts/make-sounds.js   # regenera los sonidos incluidos en assets/sounds
 ```
+
+Las E2E abren Agent Map con datos de prueba en carpetas temporales y un `claude` falso: nunca tocan tu `~/.claude` ni ejecutan el Claude real. `port.e2e` necesita el puerto 47317 libre: se omite (sin fallar) si Agent Map está abierto.
 
 | Archivo | Qué hace |
 |---|---|
 | `electron/main.js` | ventana, botones, confirmación de cierre, instancia única, log |
 | `electron/preload.cjs` | puente mínimo página ↔ ventana |
-| `server.js` | API, terminales y archivos de la interfaz |
-| `lib/scan.js` | lectura de sesiones, conversación, plan y repos de plugins |
+| `server.js` | API, eventos en vivo, terminales, sonidos y archivos de la interfaz |
+| `lib/scan.js`, `lib/jsonl.js` | lectura incremental de sesiones, conversación, plan y repos de plugins |
+| `lib/hooks.js`, `lib/agentmap-hook.js` | hook oficial: instalación por proyecto, registros y estado |
+| `lib/claude.js` | detección de `claude` en el PATH y de la carpeta de datos |
+| `lib/diag.js`, `lib/termbuf.js` | monitor de bloqueos; búfer de terminal por trozos |
 | `lib/folders.js` | explorador y creación de carpetas |
-| `lib/prefs.js` | preferencias (tema, letra, pantalla completa) y nombres/colores de sesiones |
+| `lib/prefs.js` | preferencias (tema, letra, pantalla completa, sonidos, ocultos) y nombres/colores de sesiones |
 | `lib/team.js` | equipo de agentes: crea sus archivos y lee su estado en vivo |
 | `public/office.js` | oficina pixel art del equipo (canvas, sin imágenes), globos de pensamiento |
 | `public/office.html`, `office-page.js` | la oficina en ventana aparte |
 | `statusline-tap.js` | intermediario de la statusline (uso del plan) |
-| `public/` | interfaz (HTML, CSS, JS sin frameworks) |
-| `scripts/make-icon.js` | genera `build/icon.ico` y `public/icon.png` |
+| `public/` | interfaz (HTML, CSS, JS sin frameworks); avisos en `toast.js` y `events.js`, sonidos en `sounds.js` |
+| `assets/sounds/` | los tres sonidos incluidos |
+| `scripts/make-icon.js`, `make-sounds.js` | generan el icono y los sonidos incluidos, sin dependencias |
 
 ---
 
 ## 9. Problemas conocidos
 
+- **"Claude Code no está disponible":** Agent Map no encontró el comando `claude` en el PATH. Puedes seguir viendo tus sesiones, pero no abrirlas ni iniciar nuevas. Instala Claude Code ([code.claude.com/docs](https://code.claude.com/docs)), comprueba en una terminal nueva que `claude --version` funcione y **reinicia Agent Map** (lee el PATH al arrancar).
+- **"No se encontró la carpeta de Claude Code" / "Todavía no hay sesiones":** la primera significa que no existe `~/.claude` (Claude Code nunca se usó con tu usuario); la segunda, que existe pero sin conversaciones. En ambos casos, abre una sesión con **＋ Iniciar Claude** y aparece sola en el árbol. Si dice **"No se pudo leer la carpeta"**, revisa los permisos de `~/.claude`.
+- **"La carpeta de esta sesión ya no existe":** Claude Code retoma cada sesión en su carpeta original. Restáurala o vuelve a crearla en la misma ruta y abre la sesión de nuevo.
+- **Procesos que quedan tras un cierre forzado:** el cierre normal detiene cada terminal con todo lo que lanzó. Si Agent Map se cierra a la fuerza (Administrador de tareas) o se cae, pueden quedar vivos procesos con consola propia que lanzó Claude, como servidores MCP. Ciérralos desde el Administrador de tareas.
+- **Ventana en blanco:** si la página de Agent Map se cae, la ventana queda en blanco hasta reiniciar la app (queda anotado en el log). Las terminales siguen vivas mientras tanto.
+- **Uso de GPU con sesiones trabajando:** mientras haya sesiones trabajando a la vista, su indicador animado mantiene ocupada la GPU (sin repintar la página). Sin sesiones trabajando, la app en reposo casi no usa CPU.
 - **"Failed to fetch" en modo navegador:** el servidor no está corriendo. Ejecuta `npm run web`. La app de escritorio no tiene este problema.
 - **Lentitud en carpetas dentro de tu usuario:** si `C:\Users\<tú>` es un repositorio git, Claude Code escanea todo tu perfil con `git ls-files` al trabajar en cualquier subcarpeta. Ese proceso puede seguir corriendo un rato después de cerrar la terminal; no es de Agent Map.
 - **Statusline vacía después de borrar `.agent-map`:** vuelve a abrir Agent Map (recrea el tap) o quita el prefijo de `settings.json`.
