@@ -11,7 +11,7 @@ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmap-sounds-'));
 after(() => fs.rmSync(dir, { recursive: true, force: true }));
 process.env.AGENT_MAP_USAGE_FILE = path.join(dir, 'usage.json');
 process.env.CLAUDE_CONFIG_DIR = path.join(dir, 'claude');
-const { readPrefs, updatePrefs, PREFS_FILE, SOUND_FILES } = await import('../lib/prefs.js');
+const { readPrefs, updatePrefs, PREFS_FILE, SOUND_FILES, LEGACY_SOUND_FILES, withAvailableSounds } = await import('../lib/prefs.js');
 const { startServer } = await import('../server.js');
 
 const ctx = {};
@@ -20,8 +20,8 @@ const { pickSound, createPlayer, FILES, KINDS } = ctx.AgentMapSounds;
 
 test('prefs: sonidos por defecto según la tabla propuesta', () => {
   const s = readPrefs().sounds;
-  assert.deepEqual(JSON.parse(JSON.stringify(s)), { volume: 0.7, message: { on: true, file: 'messenger-tono-mensaje.mp3' },
-    finished: { on: true, file: 'msn-online.mp3' }, toast: { on: true, file: 'nudge-nudge-msn.mp3' } });
+  assert.deepEqual(JSON.parse(JSON.stringify(s)), { volume: 0.7, message: { on: true, file: 'agentmap-mensaje.wav' },
+    finished: { on: true, file: 'agentmap-fin.wav' }, toast: { on: true, file: 'agentmap-aviso.wav' } });
   assert.deepEqual([...FILES], SOUND_FILES); // la página y el servidor ofrecen los mismos archivos
   assert.deepEqual([...KINDS], ['message', 'finished', 'toast']);
 });
@@ -32,7 +32,7 @@ test('prefs: cambios parciales se guardan en disco y persisten; lo inválido se 
   const disk = JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')).sounds; // lo que sobrevive a un reinicio
   assert.equal(disk.volume, 0.35);
   assert.deepEqual(disk.message, { on: true, file: 'msn-alert.mp3' });
-  assert.deepEqual(disk.finished, { on: false, file: 'msn-online.mp3' });
+  assert.deepEqual(disk.finished, { on: false, file: 'agentmap-fin.wav' });
   assert.throws(() => updatePrefs({ sounds: { volume: 2 } }), /Volumen/);
   assert.throws(() => updatePrefs({ sounds: { volume: NaN } }), /Volumen/);
   for (const bad of ['../../secreto.mp3', 'C:\\x.mp3', 'sub/x.mp3', 'CON.mp3', '.oculto.mp3', 'x.exe', 'a'.repeat(90) + '.mp3', 42]) {
@@ -51,12 +51,13 @@ test('prefs: un archivo editado a mano o de una versión vieja vuelve a valores 
   fs.writeFileSync(PREFS_FILE, JSON.stringify({ theme: 'noche', sounds: { volume: 7, message: { on: 'x', file: '../otro.mp3' }, toast: { on: false } } }));
   const s = readPrefs().sounds;
   assert.equal(s.volume, 0.7);
-  assert.deepEqual(s.message, { on: true, file: 'messenger-tono-mensaje.mp3' });
-  assert.deepEqual(s.toast, { on: false, file: 'nudge-nudge-msn.mp3' });
+  assert.deepEqual(s.message, { on: true, file: 'agentmap-mensaje.wav' });
+  assert.deepEqual(s.toast, { on: false, file: 'agentmap-aviso.wav' });
   fs.writeFileSync(PREFS_FILE, JSON.stringify({ theme: 'xp' })); // sin sounds (versión anterior)
-  assert.equal(readPrefs().sounds.finished.file, 'msn-online.mp3');
+  assert.equal(readPrefs().sounds.finished.file, 'agentmap-fin.wav');
 });
 
+let soundBase; // servidor de la prueba siguiente, reutilizado por las de sonidos incluidos
 test('servidor: /sounds/ sirve solo audios de las carpetas autorizadas; /api/sounds los lista', async () => {
   const mine = path.join(dir, 'sounds');
   fs.mkdirSync(path.join(mine, 'sub'), { recursive: true });
@@ -67,6 +68,7 @@ test('servidor: /sounds/ sirve solo audios de las carpetas autorizadas; /api/sou
   fs.writeFileSync(path.join(dir, 'fuera.mp3'), 'x'); // fuera de la carpeta de sonidos
   const port = await startServer(0);
   const base = `http://127.0.0.1:${port}`;
+  soundBase = base;
   const ok = await fetch(base + '/sounds/prueba-test.mp3');
   assert.equal(ok.status, 200);
   assert.equal(ok.headers.get('content-type'), 'audio/mpeg');
@@ -159,4 +161,77 @@ test('pickSound: un solo sonido por grupo; terminar gana a mensaje; el resto usa
   assert.equal(pickSound(t('message', 'session-new')), 'message');
   assert.equal(pickSound([]), null);
   assert.equal(pickSound(undefined), null);
+});
+
+// ---------- sonidos incluidos con la app (assets/sounds): los predeterminados suenan desde una instalación limpia ----------
+const BUNDLED = new URL('../assets/sounds/', import.meta.url);
+
+test('incluidos: los tres predeterminados existen y son WAV PCM válidos (cortos, mono, 16 bits)', () => {
+  assert.deepEqual(SOUND_FILES, ['agentmap-mensaje.wav', 'agentmap-fin.wav', 'agentmap-aviso.wav']);
+  for (const f of SOUND_FILES) {
+    const b = fs.readFileSync(new URL(f, BUNDLED));
+    assert.equal(b.toString('ascii', 0, 4), 'RIFF', f);
+    assert.equal(b.toString('ascii', 8, 16), 'WAVEfmt ', f);
+    assert.equal(b.readUInt16LE(20), 1, f + ': PCM');
+    assert.equal(b.readUInt16LE(22), 1, f + ': mono');
+    assert.equal(b.readUInt16LE(34), 16, f + ': 16 bits');
+    const secs = b.readUInt32LE(40) / b.readUInt32LE(28);
+    assert.ok(secs > 0.3 && secs < 1.5, `${f}: ${secs} s`);
+    assert.equal(b.length, 44 + b.readUInt32LE(40), f + ': tamaño coherente con la cabecera');
+  }
+  // Ningún sonido incluido es de los mp3 viejos: esos no se redistribuyen.
+  assert.ok(fs.readdirSync(BUNDLED).every(f => SOUND_FILES.includes(f) && !LEGACY_SOUND_FILES.includes(f)));
+});
+
+test('incluidos: el generador da exactamente los archivos guardados (son originales y reproducibles)', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const before = SOUND_FILES.map(f => fs.readFileSync(new URL(f, BUNDLED)));
+  const tmpOut = fs.mkdtempSync(path.join(dir, 'gen-'));
+  const script = fs.readFileSync(new URL('../scripts/make-sounds.js', import.meta.url), 'utf8')
+    .replace("path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'sounds')", JSON.stringify(tmpOut));
+  const copy = path.join(tmpOut, 'make-sounds.mjs');
+  fs.writeFileSync(copy, script);
+  execFileSync(process.execPath, [copy], { stdio: 'ignore' });
+  SOUND_FILES.forEach((f, i) => assert.ok(fs.readFileSync(path.join(tmpOut, f)).equals(before[i]), f));
+});
+
+test('incluidos: /api/sounds los lista y /sounds/ los sirve; un archivo propio con el mismo nombre gana', async () => {
+  const list = await (await fetch(soundBase + '/api/sounds')).json();
+  for (const f of SOUND_FILES) assert.ok(list.files.some(x => x.name === f && !x.mine), f);
+  const r = await fetch(soundBase + '/sounds/agentmap-fin.wav');
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get('content-type'), 'audio/wav');
+  assert.ok(Buffer.from(await r.arrayBuffer()).equals(fs.readFileSync(new URL('agentmap-fin.wav', BUNDLED))));
+  const mine = path.join(dir, 'sounds', 'agentmap-aviso.wav');
+  fs.writeFileSync(mine, Buffer.from('RIFF-propio'));
+  try {
+    assert.equal(Buffer.from(await (await fetch(soundBase + '/sounds/agentmap-aviso.wav')).arrayBuffer()).toString(), 'RIFF-propio');
+    assert.ok((await (await fetch(soundBase + '/api/sounds')).json()).files.some(x => x.name === 'agentmap-aviso.wav' && x.mine));
+  } finally { fs.rmSync(mine); }
+});
+
+test('preferencias viejas: un predeterminado mp3 que no está pasa al incluido; lo propio y lo que existe se respetan', () => {
+  const old = { volume: 0.4, message: { on: true, file: 'messenger-tono-mensaje.mp3' }, finished: { on: false, file: 'msn-online.mp3' },
+    toast: { on: true, file: 'mio-que-falta.mp3' } };
+  const copy = JSON.parse(JSON.stringify(old));
+  assert.deepEqual(withAvailableSounds(old, new Set()), { volume: 0.4, message: { on: true, file: 'agentmap-mensaje.wav' },
+    finished: { on: false, file: 'agentmap-fin.wav' }, toast: { on: true, file: 'mio-que-falta.mp3' } }); // lo propio que falta se sigue avisando
+  assert.deepEqual(withAvailableSounds(old, new Set(['msn-online.mp3'])).finished, { on: false, file: 'msn-online.mp3' }); // si está, se usa
+  assert.deepEqual(old, copy); // no modifica lo que recibe
+});
+
+test('preferencias viejas: /api/prefs entrega sonidos que existen sin reescribir prefs.json', async () => {
+  const saved = { theme: 'xp', sounds: { volume: 0.5, message: { on: true, file: 'msn-alert.mp3' }, finished: { on: true, file: 'msn-online.mp3' },
+    toast: { on: true, file: 'nudge-nudge-msn.mp3' } } };
+  fs.writeFileSync(PREFS_FILE, JSON.stringify(saved));
+  const have = new Set((await (await fetch(soundBase + '/api/sounds')).json()).files.map(f => f.name));
+  const got = (await (await fetch(soundBase + '/api/prefs')).json()).sounds;
+  const want = { message: 'agentmap-mensaje.wav', finished: 'agentmap-fin.wav', toast: 'agentmap-aviso.wav' };
+  for (const k of ['message', 'finished', 'toast']) {
+    const f = saved.sounds[k].file;
+    assert.equal(got[k].file, have.has(f) ? f : want[k], k); // en este equipo puede haber mp3 en Sounds/ (desarrollo)
+    assert.ok(have.has(got[k].file), k + ': siempre uno que existe');
+  }
+  assert.equal(got.volume, 0.5);
+  assert.deepEqual(JSON.parse(fs.readFileSync(PREFS_FILE, 'utf8')), saved); // el archivo no se tocó
 });

@@ -9,7 +9,7 @@ import pty from 'node-pty';
 import { scanAll, liveSessions, useHookStates, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
-import { readPrefs, updatePrefs, isSoundName } from './lib/prefs.js';
+import { readPrefs, updatePrefs, isSoundName, withAvailableSounds } from './lib/prefs.js';
 import { createTeam, teamStatus } from './lib/team.js';
 import { createThrottle, sanitize, startLagMonitor, activity } from './lib/diag.js';
 import { TermBuffer } from './lib/termbuf.js';
@@ -28,10 +28,12 @@ const VENDOR = {
 };
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png' };
 // Sonidos de aviso: se leen del disco local, nunca de internet. Orden: los del usuario (~/.agent-map/sounds),
-// Sounds/ junto al código (desarrollo) y resources/sounds de la app instalada (solo en la compilación local,
-// `npm run dist:local`: esos audios no se redistribuyen en las releases públicas).
+// Sounds/ junto al código (desarrollo), resources/sounds de la app instalada (solo en la compilación local,
+// `npm run dist:local`: esos audios no se redistribuyen en las releases públicas) y al final los incluidos con la app
+// (assets/sounds: los predeterminados, originales). Un archivo propio con el mismo nombre gana.
 export const SOUNDS_DIR = path.join(path.dirname(USAGE_FILE), 'sounds');
-const SOUND_DIRS = [SOUNDS_DIR, path.join(here, 'Sounds'), ...(process.resourcesPath ? [path.join(process.resourcesPath, 'sounds')] : [])];
+const SOUND_DIRS = [SOUNDS_DIR, path.join(here, 'Sounds'), ...(process.resourcesPath ? [path.join(process.resourcesPath, 'sounds')] : []),
+  path.join(here, 'assets', 'sounds')];
 const AUDIO_TYPES = { '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg' };
 /** nombre -> carpeta. Solo archivos reales que aparecen al listar las carpetas autorizadas (sin enlaces ni rutas). */
 async function soundFiles() {
@@ -165,10 +167,12 @@ const server = http.createServer(async (req, res) => {
       } catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
     }
     if (url.pathname === '/api/prefs') {
-      if (req.method !== 'POST') return json(res, readPrefs());
+      // Los sonidos que se entregan son los que de verdad hay (un predeterminado viejo ausente pasa al incluido).
+      const withSounds = async p => ({ ...p, sounds: withAvailableSounds(p.sounds, await soundFiles()) });
+      if (req.method !== 'POST') return json(res, await withSounds(readPrefs()));
       // Escribe en disco: solo desde la propia página.
       if (!ALLOWED_ORIGINS.has(req.headers.origin)) { res.writeHead(403); return res.end(); }
-      try { return json(res, updatePrefs(await readJson(req))); }
+      try { return json(res, await withSounds(updatePrefs(await readJson(req)))); }
       catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
     }
     if (url.pathname === '/api/tree') {

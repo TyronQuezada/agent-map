@@ -3,8 +3,8 @@
 (function (root) {
   'use strict';
 
-  // Nombres sugeridos por defecto (los mismos que lib/prefs.js). No vienen con la app: se ponen en ~/.agent-map/sounds.
-  const FILES = ['messenger-tono-mensaje.mp3', 'msn-alert.mp3', 'msn-online.mp3', 'nudge-nudge-msn.mp3'];
+  // Sonidos incluidos con la app (los mismos que SOUND_FILES de lib/prefs.js); los propios van en ~/.agent-map/sounds.
+  const FILES = ['agentmap-mensaje.wav', 'agentmap-fin.wav', 'agentmap-aviso.wav'];
   const KINDS = ['message', 'finished', 'toast'];
   // Mismo criterio que isSoundName en lib/prefs.js: un nombre de archivo simple con extensión de audio.
   const isSoundName = n => typeof n === 'string' && /^[^\\/:*?"<>|\x00-\x1f]{1,80}\.(mp3|wav|ogg)$/i.test(n)

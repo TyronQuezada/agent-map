@@ -42,6 +42,7 @@
       "lib/**",
       "public/**",
       "electron/**",
+      "assets/sounds/**",
       "build/icon.ico",
       "package.json"
     ],

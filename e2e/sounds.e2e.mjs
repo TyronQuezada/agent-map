@@ -1,5 +1,6 @@
 // E2E: los cuatro sonidos reales de Sounds/ (desarrollo) o de resources/sounds (instalador local, npm run dist:local).
-// Sin preferencias previas: comprueba los predeterminados, la reproducción real de cada archivo, los controles y el reinicio.
+// Sin preferencias previas: los predeterminados son los incluidos con la app y los cuatro mp3 se pueden elegir; después,
+// la reproducción real de cada mp3 elegido, los controles y el reinicio.
 import fs from 'node:fs';
 import path from 'node:path';
 import { APP, launch, makeFixture, packaged, reporter, sleep, tempRoot, userLine, assistantLine } from './lib.mjs';
@@ -39,9 +40,11 @@ try {
 
   await a.ev('showOptions(), true'); await sleep(500);
   const defaults = JSON.parse(await a.ev(`JSON.stringify(['message', 'finished', 'toast'].map(k => document.querySelector('[data-snd-file="' + k + '"]').value)
-    .concat([!!document.querySelector('.snd-missing'), [...document.querySelectorAll('[data-snd-file="message"] option')].map(o => o.value).includes('msn-alert.mp3')]))`));
-  r.check('predeterminados: mensaje=messenger-tono-mensaje, terminó=msn-online, otros=nudge-nudge-msn; msn-alert elegible; nada falta',
-    JSON.stringify(defaults) === JSON.stringify(['messenger-tono-mensaje.mp3', 'msn-online.mp3', 'nudge-nudge-msn.mp3', false, true]), JSON.stringify(defaults));
+    .concat([!!document.querySelector('.snd-missing'), ${JSON.stringify(FILES)}.every(f => [...document.querySelectorAll('[data-snd-file="message"] option')].map(o => o.value).includes(f))]))`));
+  r.check('predeterminados: los incluidos (agentmap-mensaje, agentmap-fin, agentmap-aviso); los cuatro mp3 elegibles; nada falta',
+    JSON.stringify(defaults) === JSON.stringify(['agentmap-mensaje.wav', 'agentmap-fin.wav', 'agentmap-aviso.wav', false, true]), JSON.stringify(defaults));
+  const pick = async (k, file) => { await a.ev(`(() => { const s = document.querySelector('[data-snd-file="${k}"]'); s.value = ${JSON.stringify(file)}; s.dispatchEvent(new Event('change', { bubbles: true })); return true; })()`); await sleep(700); };
+  await pick('message', 'messenger-tono-mensaje.mp3'); await pick('finished', 'msn-online.mp3'); await pick('toast', 'nudge-nudge-msn.mp3');
   const test = async k => { await a.ev(`document.querySelector('[data-snd-test="${k}"]').click(), true`); await sleep(900); return a.ev(`$('#optSndMsg').textContent`); };
   const m1 = await test('message'); const p1 = await lastFile();
   const m2 = await test('finished'); const p2 = await lastFile();
