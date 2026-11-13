@@ -122,7 +122,9 @@ body.resizing .term, body.resizing iframe { pointer-events: none; }
 .tile:hover { border-color: var(--sel); box-shadow: 0 0 0 2px #cfe0fb; }
 .tile b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tile small { color: var(--muted); }
-.warn { border-left: 4px solid #f0a020; }
+.warn, .claude-missing { border-left: 4px solid #f0a020; }
+.claude-empty { text-align: left; line-height: 1.45; }
+.claude-empty p { margin: 0 0 8px; }
 .newrow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #newDir { flex: 1; min-width: 200px; padding: 4px 8px; border: 1px solid #7f9db9; border-radius: 3px; font: inherit; background: #fff; }
 .xpbtn:disabled { opacity: .55; cursor: default; box-shadow: none; }

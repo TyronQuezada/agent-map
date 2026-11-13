@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import pty from 'node-pty';
 import { scanAll, liveSessions, useHookStates, isUuid, readMessages, pluginRepos, planInfo, CLAUDE_DIR } from './lib/scan.js';
+import { claudeStatus, findClaude } from './lib/claude.js';
 import { USAGE_FILE } from './statusline-tap.js';
 import { listDirs, makeDir, isDir } from './lib/folders.js';
 import { readPrefs, updatePrefs, isSoundName, withAvailableSounds } from './lib/prefs.js';
@@ -175,6 +176,7 @@ const server = http.createServer(async (req, res) => {
       try { return json(res, await withSounds(updatePrefs(await readJson(req)))); }
       catch (err) { res.err = err; res.writeHead(400); return res.end(err.message); }
     }
+    if (url.pathname === '/api/claude') return json(res, await claudeStatus()); // ¿hay CLI en el PATH y carpeta de datos?
     if (url.pathname === '/api/tree') {
       lastTree = await scanAll();
       const open = [...terms.values()].map(t => ({ key: t.key, label: t.label, sessionId: t.sessionId, cwd: t.cwd, alive: t.alive }));
@@ -300,18 +302,24 @@ async function onTerminal(ws, url) {
   if (t && !t.alive) { terms.delete(key); t = null; }
   if (!t) {
     if (!lastTree.length) lastTree = await scanAll();
+    let opts;
     if (sessionId) {
       const found = isUuid(sessionId) && findSession(sessionId);
       if (!found) { ws.close(4004, 'Sesión no encontrada'); return; }
-      t = startTerm({ key: sessionId, label: found.s.title || found.s.aiTitle || found.p.name, sessionId,
-        cwd: found.s.cwd || found.p.cwd, args: ['--resume', sessionId], cols, rows });
+      const cwd = found.s.cwd || found.p.cwd;
+      // claude --resume debe abrirse en la carpeta de la sesión: si ya no existe, se dice eso (no un error de node-pty).
+      if (!isDir(cwd)) { ws.close(4006, 'La carpeta de esta sesión ya no existe'); return; }
+      opts = { key: sessionId, label: found.s.title || found.s.aiTitle || found.p.name, sessionId, cwd, args: ['--resume', sessionId] };
     } else if (newCwd) {
       // Cualquier carpeta existente que elija el usuario; el chequeo de Origin del upgrade impide que la mande otra web.
       if (!isDir(newCwd)) { ws.close(4004, 'Carpeta no encontrada'); return; }
       const cwd = path.resolve(newCwd);
-      const k = 'new-' + Date.now();
-      t = startTerm({ key: k, label: 'Nueva · ' + (path.basename(cwd) || cwd), sessionId: null, cwd, args: [], cols, rows });
+      opts = { key: 'new-' + Date.now(), label: 'Nueva · ' + (path.basename(cwd) || cwd), sessionId: null, cwd, args: [] };
     } else { ws.close(4000, 'Falta parámetro'); return; }
+    // Sin `claude` en el PATH, cmd.exe solo diría "no se reconoce como un comando": la página explica cómo resolverlo.
+    if (!findClaude()) { ws.close(4005, 'Claude Code no está instalado o no está en el PATH'); return; }
+    try { t = startTerm({ ...opts, cols, rows }); }
+    catch (err) { logger(`no se pudo iniciar la terminal: ${sanitize(err.message, 200)}`); ws.close(4007, 'No se pudo iniciar Claude Code'); return; }
   }
 
   t.sockets.add(ws);

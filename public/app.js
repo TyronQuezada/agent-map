@@ -41,6 +41,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': 
 const state = {
   projects: [], repos: {}, filter: 'all', query: '',
   newDir: '',                // carpeta elegida para "Iniciar Claude"
+  claude: null,              // /api/claude: { cli: { found, path }, data: { state, dir, code } } (null = todavía no se sabe)
   selected: null,            // id de sesión seleccionada
   selectedSub: null,         // id de subagente seleccionado
   expandedProjects: null,    // Set; se inicializa con los 3 proyectos más recientes
@@ -152,7 +153,7 @@ function renderTree() {
     if (open) projects += `<div class="children">${sessions.map(s => sessionNode(s, p)).join('')}</div>`;
   }
   const nHidden = hiddenCount();
-  html += treeSection('tree:proyectos', 'Proyectos', shown, (projects || `<div class="empty">No hay sesiones que coincidan.</div>`)
+  html += treeSection('tree:proyectos', 'Proyectos', shown, (projects || emptyTree())
     + (nHidden ? `<button type="button" class="hidden-note" data-act="show-hidden" title="Verlos y recuperarlos en ⚙ Opciones">🙈 ${nHidden} oculto${nHidden > 1 ? 's' : ''} · ver en Opciones</button>` : ''));
   tree.innerHTML = html;
 }
@@ -195,6 +196,33 @@ $('#tree').addEventListener('click', e => {
   if (act === 'sub') { state.selected = id; state.selectedSub = el.dataset.sub; renderAll(); return; }
   if (act === 'session') selectSession(id);
 });
+
+// ---------- Claude Code ausente o sin sesiones: qué pasa y cómo resolverlo ----------
+const CLAUDE_HELP = 'Instala Claude Code (<a href="https://code.claude.com/docs" target="_blank" rel="noopener">code.claude.com/docs</a>), abre una terminal nueva y comprueba que <code>claude --version</code> funcione. Después reinicia Agent Map.';
+async function loadClaude() {
+  try { state.claude = await (await fetch('/api/claude')).json(); } catch { /* se reintenta en la próxima carga */ }
+}
+/** Árbol vacío: sin coincidencias (hay sesiones), sin sesiones, sin carpeta de Claude Code o error al leerla. */
+function emptyTree() {
+  if (state.projects.length) return '<div class="empty">No hay sesiones que coincidan.</div>';
+  const c = state.claude, dir = c ? `<code>${esc(c.data.dir)}</code>` : '';
+  const cli = c && !c.cli.found ? `<p><b>Tampoco se encontró el comando <code>claude</code>.</b> ${CLAUDE_HELP}</p>` : '';
+  if (c?.data.state === 'error') return `<div class="empty claude-empty" data-claude="error"><p><b>No se pudo leer la carpeta de Claude Code</b> (${dir}: ${esc(c.data.code)}).</p>
+    <p>Revisa que tu usuario tenga permiso para abrirla. Agent Map vuelve a intentarlo cada 15 s.</p>${cli}</div>`;
+  if (c?.data.state === 'missing') return `<div class="empty claude-empty" data-claude="missing"><p><b>No se encontró la carpeta de Claude Code</b> (${dir}).</p>
+    ${c.cli.found ? '<p>Claude Code está instalado pero todavía no se usó con este usuario. Abre una sesión desde 🏠 Inicio (＋ Iniciar Claude) y aparecerá aquí.</p>' : `<p>${CLAUDE_HELP}</p>`}</div>`;
+  return `<div class="empty claude-empty" data-claude="empty"><p><b>Todavía no hay sesiones de Claude Code.</b></p>
+    <p>Inicia una desde 🏠 Inicio (＋ Iniciar Claude) o ejecuta <code>claude</code> en una carpeta: aparecerá aquí sola.</p>${cli}</div>`;
+}
+/** Texto para la terminal cuando el servidor no pudo abrir Claude (códigos 4000+ del WebSocket). */
+function termCloseText(ev, cwd) {
+  const red = s => `\r\n\x1b[31m${s}\x1b[0m\r\n`;
+  if (ev.code === 4005) return red('Claude Code no está instalado o no está en el PATH.')
+    + '\r\nPara resolverlo:\r\n  1. Instala Claude Code: https://code.claude.com/docs\r\n  2. En una terminal nueva, comprueba que funcione: claude --version\r\n  3. Reinicia Agent Map (lee el PATH al arrancar).\r\n';
+  if (ev.code === 4006) return red('La carpeta de esta sesión ya no existe' + (cwd ? ': ' + cwd : '') + '.')
+    + '\r\nClaude Code retoma cada sesión en su carpeta original. Restáurala (o vuelve a crearla en la misma ruta) y ábrela de nuevo.\r\n';
+  return red(ev.reason);
+}
 
 // ---------- menú contextual de una sesión (click derecho) ----------
 $('#tree').addEventListener('contextmenu', e => {
@@ -631,7 +659,11 @@ function openTerm(params, label, sessionId, cwd = "") {
     }
     term.write(ev.data);
   };
-  ws.onclose = ev => { if (ev.code >= 4000) term.write(`\r\n\x1b[31m${ev.reason}\x1b[0m\r\n`); };
+  ws.onclose = ev => {
+    if (ev.code < 4000) return;
+    term.write(termCloseText(ev, t.cwd)); // t.cwd: la carpeta de la sesión aunque no la haya pasado quien abrió
+    if (ev.code === 4005) loadClaude().then(renderAll); // el aviso de Inicio y del árbol con el estado nuevo
+  };
   const send = d => ws.readyState === 1 && ws.send(JSON.stringify({ t: 'in', d }));
   term.onData(send);
   // Copiar/pegar como en Windows Terminal: Ctrl+C copia si hay selección (si no, interrumpe), Ctrl+V pega.
@@ -690,7 +722,13 @@ function showHome(warnFor) {
   $('#closeTerm').hidden = true;
   $('#termTitle').textContent = warnFor ? '⚠ ' + title(warnFor) : '🏠 Inicio';
   const recent = allSessions().sort((a, b) => b.end.localeCompare(a.end)).slice(0, 9);
+  const noCli = state.claude && !state.claude.cli.found;
   $('#home').innerHTML = `
+    ${noCli ? `<div class="card claude-missing" style="margin-bottom:14px">
+      <h2>⚠ Claude Code no está disponible</h2>
+      <p>No se encontró el comando <code>claude</code> en el PATH, así que no se pueden abrir ni retomar sesiones. Puedes seguir viendo las que ya existen.</p>
+      <p>${CLAUDE_HELP}</p>
+    </div>` : ''}
     ${warnFor ? `<div class="card warn" style="margin-bottom:14px">
       <h2>Esta sesión ya está abierta en otra terminal</h2>
       <p>Si la abres aquí también, las dos ventanas escribirán en la misma conversación y pueden pisarse.
@@ -1468,6 +1506,7 @@ async function load() {
   try {
     const r = await fetch('/api/tree');
     const data = await r.json();
+    if (!state.claude || !data.projects.length) await loadClaude(); // al abrir y mientras no haya sesiones
     if (seq !== loadSeq) return; // llegó una llamada más nueva mientras tanto
     state.projects = data.projects;
     syncSeen();
